@@ -2,7 +2,7 @@
 
 - [에이전트 친화적 Rust · GPUI 멀티 OS 디버깅 환경](agent-debug-environment/README.md) — 구현·검증 완료(`T0`–`T4`) · 사용 가이드: [scripts/debug/README.md](../../scripts/debug/README.md)
 
-- [GitHub Releases 기반 크로스플랫폼 업데이트 시스템](github-update-system/README.md) — 플래닝 완료(`T0-A`–`T8-A`) · 조사/구현 착수 대기
+- [GitHub Releases 기반 크로스플랫폼 업데이트 시스템](github-update-system/README.md) — `T0-A`–`T6-A` + `GATE-01`(`dotdotgod/DDG`) + 3플랫폼 실 CI 전체 통과 완료 · Apple 자격증명(`GATE-02`–`GATE-05`)·실기 `US-01..03` 후속 대기 · [최종 보고](../archive/report/2026-11-26/github-update-system/FINAL.md)
 
 - [탭 아이콘 · OSC 7501 에이전트 상태 · 에이전트 리스트 · `ddg` 기본 에이전트 설정](agent-status-icons-profiles/README.md) — T0–T6-A 구현·실환경 검증 완료 · T6-B GUI 실기 대기
 

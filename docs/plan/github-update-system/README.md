@@ -3,7 +3,7 @@
 [UX·UI 설계(ASCII 아트)](DESIGN_UI.md) · [데이터·네트워크·보안 설계](DESIGN_DATA.md) · [유닛 테스트(22 UT)](TESTS.md) · [사용자 시나리오(6 US)](SCENARIOS.md) · [태스크(Phase 0–3)](TASKS_CORE.md) · [태스크(Phase 4–8)](TASKS_UI_RELEASE.md) · [플래닝 완료 보고](../../archive/report/2026-11-26/github-update-system/PLANNING.md)
 
 ## 상태와 확정 기록
-- **상태**: **`T0-A`–`T6-A` 구현·검증 완료 (`2026-11-26`)** — `T7-A`(`GATE-01`–`GATE-05`)·`T6-B`(`US-01`/`US-02`)·`T8-A`(`GATE-06`) 외부 승인 및 실기 검증 대기 ([배치 보고](../../archive/report/2026-11-26/github-update-system/BATCH_T0_T6A.md) · [T6-A 증거](verification/T6-A-report.md))
+- **상태**: **`T0-A`–`T6-A` + `GATE-01`(`dotdotgod/DDG`) + 3플랫폼 실 CI 전체 통과 완료 (`2026-11-26`)** — Apple 자격증명 준비 후 `GATE-02`–`GATE-05`·`US-01..03` 후속 실행 대기 ([최종 보고](../../archive/report/2026-11-26/github-update-system/FINAL.md) · [배치 보고](../../archive/report/2026-11-26/github-update-system/BATCH_T0_T6A.md) · [T6-A 증거](verification/T6-A-report.md))
 - **확정 조합 (A1–A18)**: `A1` Public GitHub Releases · `A2` 로컬 4종 + 원격 `Ssh` 푸시 · `A3+A7` `macOS arm64` + `Linux x86_64/aarch64` + Windows `x86_64` 전체(ConPTY 포함) · `A4` 자동 확인(opt-out 0-네트워크) + 승인 적용 · `A5` Core Detach 무중단 교체 + N-1 자동 롤백 · `A6` HTTPS+SHA-256 우선(`manifest.json.sig` 분리 Ed25519 슬롯 선반영) · `A8` macOS `.app` + Apple Developer ID 서명·공증 · `A9` 동일 프로토콜 경고 / 비호환 차단 · `A10` `stable`+`prerelease`(opt-in) + N-1 보존 + 캐시 최근 2개 · `A11` 레포 플레이스홀더+오버라이드 · `A12` 커스텀 레포도 공식 DDG Team ID 고정 · `A13` 커스텀 레포 추가 강제 플래그 없음(오픈소스) · `A15` 원격 수동 롤백 포함 · `A16`(A14 대체) `ContainerSsh`·`DockerExec` 인플레이스 차단+이미지 안내 · `A17` 즉시 재시작(`PendingRestart` 삭제) · `A18` 배너 세션 한정 닫기(`skipped_version` 삭제).
 - **역할·모델 분리**: 계획·설계·리뷰·최종 검수 = **Antigravity (Gemini 4 Neon)** (독립 서브에이전트 15개 역할 병렬/순차 수행); 구현 = 실행 세션에서 로컬 `pi --provider openai --model gpt-6.2-sol --thinking medium` + `/Users/dotdot/.agents/skills/ddg-planning/roles/implementer.md`.
 
@@ -62,4 +62,4 @@ DDG Agents(`Cargo.toml` v0.1.0, `.git` 미초기화)는 현재 로컬·원격 �
 ## 일정과 수행자 · 위험 및 미결정 사항
 - **일정/수행자**: 착수 시점 미정(새 실행 세션 착수 시 진행). 구현 = 로컬 `pi (openai/gpt-6.2-sol, --thinking medium)`, 검수 = `Antigravity (Gemini 4 Neon)`.
 - **남은 위험·외부 선행 조건**: ① `R-01` Windows `ghostty-vt.lib`+GPUI 링크(`T0-A` 선행 게이트), ② `R-02` 공식 `owner/repo`·Apple Developer ID/Notary 시크릿·2차 Ed25519 키(`T7-A` `GATE-01..05`), ③ `R-03` Windows 실기(`US-02`·`#[cfg(windows)]` UT는 실행 전 `미검증`), ④ `R-04` 원격 Linux `glibc ≤ 2.36`·`v0.1.0` 실바이너리 업그레이드(`US-03`), ⑤ `R-05` 계획 단계 미실행.
-- **최종 완료 보고서 경로**: [PLANNING.md](../../archive/report/2026-11-26/github-update-system/PLANNING.md)
+- **최종 완료 보고서 경로**: [FINAL.md](../../archive/report/2026-11-26/github-update-system/FINAL.md)

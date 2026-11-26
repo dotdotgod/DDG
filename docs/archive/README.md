@@ -7,7 +7,7 @@
 
 ## 보고서
 
-- [GitHub Releases 기반 크로스플랫폼 업데이트 시스템 플래닝 보고](report/2026-11-26/github-update-system/README.md)
+- [GitHub Releases 기반 크로스플랫폼 업데이트 시스템 완료 보고](report/2026-11-26/github-update-system/README.md)
 
 - [탭 아이콘 · OSC 7501 상태 · 에이전트 리스트 · `ddg` 기본 에이전트 플래닝 보고](report/2026-11-26/agent-status-icons-profiles/README.md)
 
