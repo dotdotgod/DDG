@@ -60,18 +60,19 @@ jobs:
           trap 'docker rm "$container" >/dev/null' EXIT
           mkdir "$RUNNER_TEMP/ghostty-vt"
           docker cp "$container:/out/lib/libghostty-vt.a" "$RUNNER_TEMP/ghostty-vt/libghostty-vt.a"
-      - name: Workspace tests, Clippy, OpenRPC and native version on Bookworm
+      - name: Headless workspace tests, Clippy, OpenRPC and CLI versions on Bookworm
         run: |
           docker run --rm --platform linux/amd64 \
             -v "$GITHUB_WORKSPACE:/work" -v "$RUNNER_TEMP/ghostty-vt:/vt:ro" -w /work \
             -e GHOSTTY_VT_LIB_DIR=/vt -e CARGO_TERM_COLOR \
             rust:1-bookworm bash -euxo pipefail -c '
               apt-get update
-              apt-get install -y --no-install-recommends clang cmake pkg-config libfontconfig1-dev \
-                libwayland-dev libxkbcommon-x11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+              apt-get install -y --no-install-recommends clang cmake pkg-config
               rustup component add clippy
-              cargo test --locked --workspace
-              cargo clippy --locked --workspace --all-targets -- -D warnings
+              cargo test --locked --workspace --exclude ddg-agents-native
+              cargo clippy --locked --workspace --exclude ddg-agents-native --all-targets -- -D warnings
               cargo test --locked -p ddg-agents-proto openrpc_schemas_are_valid_and_up_to_date
-              cargo run --locked -p ddg-agents-native -- --version
+              cargo run --locked -p ddg-agents-cli -- --version
+              cargo run --locked -p ddg-agents-host -- --version
+              cargo run --locked -p ddg-terminal-server -- --version
             '

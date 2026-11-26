@@ -408,7 +408,8 @@ mod tests {
 
     #[test]
     fn skill_frontmatter_and_operator_commands() {
-        let (meta, body) = SKILL
+        let skill = SKILL.replace("\r\n", "\n");
+        let (meta, body) = skill
             .strip_prefix("---\n")
             .unwrap()
             .split_once("\n---\n")

@@ -2,6 +2,8 @@
 /native/target/
 /.dotdotgod/
 .DS_Store
+__pycache__/
+*.pyc
 
 *.p12
 *.p8

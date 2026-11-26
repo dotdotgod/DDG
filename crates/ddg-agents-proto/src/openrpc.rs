@@ -381,7 +381,7 @@ mod tests {
                     )
                 });
                 assert_eq!(
-                    existing,
+                    existing.replace("\r\n", "\n"),
                     formatted,
                     "stale schema {} (run with DDG_UPDATE_SCHEMA=1)",
                     path.display()
