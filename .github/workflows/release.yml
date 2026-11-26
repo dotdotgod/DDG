@@ -1,0 +1,254 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Keep the release in draft (select an existing v* tag)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          python3 - <<'PY'
+          import os, re, tomllib
+          tag = os.environ['RELEASE_TAG']
+          with open('Cargo.toml', 'rb') as f:
+              version = tomllib.load(f)['workspace']['package']['version']
+          if tag != 'v' + version or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', tag):
+              raise SystemExit('Release ref must be a v-prefixed tag matching the workspace version (no build metadata)')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              print(f'version={version}', file=f)
+          PY
+
+  macos-arm64:
+    needs: prepare
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: scripts/release/setup-macos.sh
+      - run: rustup update stable --no-self-update
+      - run: cargo +stable build --locked --release --bins
+      - run: target/release/ddg-agents-native --version
+      - name: Sign, notarize and staple the app
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
+        run: |
+          : "${APPLE_CERTIFICATE_P12_BASE64:?}" "${APPLE_CERTIFICATE_PASSWORD:?}" "${APPLE_NOTARY_KEY_P8_BASE64:?}"
+          if [[ "$DRAFT" == false ]]; then
+            grep -Fqx "pub const EXPECTED_APPLE_TEAM_ID: &str = \"${APPLE_TEAM_ID:?}\";" crates/ddg-agents-update/src/macos.rs \
+              || { echo 'Updater does not trust the configured Apple Team ID' >&2; exit 1; }
+          fi
+          umask 077
+          dir=$(mktemp -d "$RUNNER_TEMP/ddg-sign.XXXXXX")
+          keychain="$dir/signing.keychain-db"
+          old_keychains=()
+          current=$(security list-keychains -d user)
+          while IFS= read -r path; do
+            if [[ -n "$path" ]]; then old_keychains+=("$path"); fi
+          done < <(printf '%s\n' "$current" | sed -E 's/^[[:space:]]*"//; s/"$//')
+          cleanup() {
+            security list-keychains -d user -s ${old_keychains[@]+"${old_keychains[@]}"} || true
+            security delete-keychain "$keychain" || true
+            rm -rf "$dir"
+          }
+          trap cleanup EXIT
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 -D > "$dir/cert.p12"
+          export APPLE_NOTARY_KEY_FILE="$dir/notary.p8"
+          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 -D > "$APPLE_NOTARY_KEY_FILE"
+          keychain_password=$(openssl rand -hex 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$dir/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          # Keep archive members' normal permissions; the secret directory is already private.
+          umask 022
+          scripts/release/package-macos.sh --sign --bin-dir target/release --version "$VERSION" --out-dir dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-darwin-arm64
+          path: dist/*.app.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  linux:
+    name: ${{ matrix.platform }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Build and package Bookworm binaries
+        run: |
+          bins="$RUNNER_TEMP/release-binaries"
+          docker buildx build --target release-binaries --platform "linux/$ARCH" \
+            --output "type=local,dest=$bins" -f docker/Dockerfile .
+          scripts/release/check-glibc.sh "$bins/ddg" "$bins/ddg-agents-host" "$bins/ddg-terminal-server"
+          mkdir -p dist
+          chmod 0755 "$bins/ddg" "$bins/ddg-agents-host" "$bins/ddg-terminal-server"
+          chmod 0644 "$bins/THIRD_PARTY_NOTICES.txt"
+          LC_ALL=C tar --format=ustar --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$bins" \
+            -cf - THIRD_PARTY_NOTICES.txt ddg ddg-agents-host ddg-terminal-server \
+            | gzip -n -9 > "dist/ddg-agents-$VERSION-$PLATFORM.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  windows-x86_64:
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c # v1.13.0
+        with:
+          arch: x64
+      - run: scripts/release/setup-windows.ps1
+      - run: rustup update stable --no-self-update
+      - run: cargo +stable build --locked --release --bins
+      - name: Smoke test and package Windows binaries
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $bins = Join-Path $env:RUNNER_TEMP 'release-binaries'
+          New-Item -ItemType Directory -Path $bins, dist | Out-Null
+          foreach ($name in @('ddg', 'ddg-agents-host', 'ddg-terminal-server', 'ddg-agents-native')) {
+            $binary = "target/release/$name.exe"
+            & $binary --version
+            Copy-Item -LiteralPath $binary -Destination $bins
+          }
+          Copy-Item -LiteralPath THIRD_PARTY_NOTICES.txt -Destination $bins
+          Compress-Archive -Path "$bins/*" -DestinationPath "dist/ddg-agents-$env:VERSION-windows-x86_64.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: [prepare, macos-arm64, linux, windows-x86_64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      DRAFT: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Generate manifest, checksums and Phase 2 signature
+        env:
+          RELEASE_ED25519_PRIVATE_KEY: ${{ secrets.RELEASE_ED25519_PRIVATE_KEY }}
+          RELEASE_ED25519_KEY_ID: ${{ vars.RELEASE_ED25519_KEY_ID }}
+        run: |
+          scripts/release/generate-manifest.py --artifacts-dir dist --tag "$TAG" --require-all \
+            --release-notes-summary "DDG Agents $TAG"
+      - name: Verify Phase 2 signature with the updater's embedded keys
+        run: |
+          [[ -f dist/manifest.json.sig ]] || exit 0
+          smoke=$(mktemp -d "$RUNNER_TEMP/verify-manifest.XXXXXX")
+          trap 'rm -rf "$smoke"' EXIT
+          mkdir "$smoke/src"
+          cp Cargo.lock "$smoke/"
+          printf '%s\n' '[package]' 'name = "verify-release-manifest"' 'version = "0.0.0"' 'edition = "2024"' \
+            '[dependencies]' "ddg-agents-update = { path = '$PWD/crates/ddg-agents-update', features = ['network'] }" \
+            > "$smoke/Cargo.toml"
+          cat > "$smoke/src/main.rs" <<'RS'
+          use ddg_agents_update::{integrity::verify_manifest, version::ReleaseTag};
+          use std::fs;
+          fn main() -> Result<(), Box<dyn std::error::Error>> {
+              let tag = ReleaseTag::parse(&std::env::var("TAG")?)?;
+              verify_manifest(&fs::read("dist/manifest.json")?, Some(&fs::read("dist/manifest.json.sig")?), &tag)?;
+              Ok(())
+          }
+          RS
+          rustup toolchain install stable --profile minimal
+          cargo +stable run --quiet --manifest-path "$smoke/Cargo.toml"
+      - name: Upload release assets before making the release visible
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { TAG, DRAFT } = process.env;
+            const repo = context.repo;
+            const manifest = JSON.parse(fs.readFileSync('dist/manifest.json', 'utf8'));
+            const assets = [...manifest.artifacts.map(a => a.name), 'manifest.json', 'SHA256SUMS'];
+            if (fs.existsSync('dist/manifest.json.sig')) assets.push('manifest.json.sig');
+            for await (const page of github.paginate.iterator(github.rest.repos.listReleases, repo)) {
+              if (page.data.some(release => release.tag_name === TAG)) {
+                throw new Error(`A release for ${TAG} already exists; reconcile it before re-running`);
+              }
+            }
+            const { data: release } = await github.rest.repos.createRelease({
+              ...repo, tag_name: TAG, draft: true, prerelease: manifest.channel === 'prerelease', generate_release_notes: true,
+            });
+            for (const name of assets) {
+              await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id: release.id, name, data: fs.readFileSync(`dist/${name}`),
+              });
+            }
+            if (DRAFT === 'false') {
+              await github.rest.repos.updateRelease({ ...repo, release_id: release.id, draft: false });
+            }

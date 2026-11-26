@@ -1,0 +1,129 @@
+# syntax=docker/dockerfile:1.7
+
+# =============================================================================
+# Stage 1: Build libghostty-vt 1.0.1 statically from official release tarballs
+# =============================================================================
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS vt-builder
+ARG BUILDARCH
+
+ENV ZIG_VERSION=0.17.1 \
+    GHOSTTY_VT_VERSION=1.0.1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN set -eux; \
+    case "${BUILDARCH}" in \
+        arm64) ZIG_ARCH="aarch64"; ZIG_SHA="a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795" ;; \
+        amd64) ZIG_ARCH="x86_64";  ZIG_SHA="3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a" ;; \
+        *) echo "Unsupported BUILDARCH: ${BUILDARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" -o zig.tar.xz; \
+    echo "${ZIG_SHA}  zig.tar.xz" | sha256sum -c -; \
+    mkdir -p /opt/zig; \
+    tar -xJf zig.tar.xz --strip-components=1 -C /opt/zig; \
+    rm zig.tar.xz; \
+    curl -fsSL "https://release.files.ghostty.org/libghostty-vt/${GHOSTTY_VT_VERSION}/libghostty-vt-${GHOSTTY_VT_VERSION}.tar.gz" -o vt.tar.gz; \
+    curl -fsSL "https://release.files.ghostty.org/libghostty-vt/${GHOSTTY_VT_VERSION}/libghostty-vt-${GHOSTTY_VT_VERSION}-deps.tar.gz" -o vt-deps.tar.gz; \
+    echo "333dfce97641ef9b536bb9e08907ad86abaaada50e8f7417b70d9284adef37aa  vt.tar.gz" | sha256sum -c -; \
+    echo "91a4e10960a52bf5bf4b15aa2a2cddaff8a89d6cd903d3055bda4fd17de3356d  vt-deps.tar.gz" | sha256sum -c -; \
+    mkdir -p /src/vt /src/deps; \
+    tar -xzf vt.tar.gz --strip-components=1 -C /src/vt; \
+    tar -xzf vt-deps.tar.gz -C /src/deps; \
+    rm vt.tar.gz vt-deps.tar.gz
+
+ARG TARGETARCH
+ARG ZIG_OPTIMIZE=ReleaseSafe
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        arm64) ZIG_TARGET="aarch64-linux-gnu.2.36" ;; \
+        amd64) ZIG_TARGET="x86_64-linux-gnu.2.36" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    DEPS_DIR="/src/deps"; \
+    if [ -d "/src/deps/p" ]; then DEPS_DIR="/src/deps/p"; \
+    elif [ -d "/src/deps/libghostty-vt-${GHOSTTY_VT_VERSION}-deps/p" ]; then DEPS_DIR="/src/deps/libghostty-vt-${GHOSTTY_VT_VERSION}-deps/p"; \
+    elif [ -d "/src/deps/libghostty-vt-${GHOSTTY_VT_VERSION}-deps" ]; then DEPS_DIR="/src/deps/libghostty-vt-${GHOSTTY_VT_VERSION}-deps"; fi; \
+    cd /src/vt; \
+    /opt/zig/zig build \
+        -Dtarget="${ZIG_TARGET}" \
+        -Demit-lib-vt \
+        -Demit-exe=false \
+        -Doptimize="${ZIG_OPTIMIZE}" \
+        -Dcpu=baseline \
+        --system "${DEPS_DIR}" \
+        --prefix /out \
+        --cache-dir /tmp/zig-cache; \
+    ls -la /out/lib
+
+# Build on the Docker VM's native architecture; rustc can crash under x86 emulation.
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS rust-builder
+ARG BUILDARCH
+ARG TARGETARCH
+ENV GHOSTTY_VT_LIB_DIR=/opt/ghostty-vt/lib \
+    CARGO_TARGET_DIR=/opt/ddg-target \
+    CARGO_PROFILE_DEV_DEBUG=2 \
+    CARGO_PROFILE_DEV_STRIP=none
+COPY --from=vt-builder /out/lib/libghostty-vt.a /opt/ghostty-vt/lib/libghostty-vt.a
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# Don't pull in the desktop GPUI client in this server-only image.
+RUN --mount=type=cache,target=/usr/local/cargo/registry set -eux; \
+    sed -i '/"native",/d' Cargo.toml; \
+    set --; \
+    debug_dir="$CARGO_TARGET_DIR/debug"; \
+    if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
+        case "$TARGETARCH" in \
+            amd64) rust_target=x86_64-unknown-linux-gnu; cross=x86_64-linux-gnu; gcc_pkg=gcc-x86-64-linux-gnu ;; \
+            arm64) rust_target=aarch64-unknown-linux-gnu; cross=aarch64-linux-gnu; gcc_pkg=gcc-aarch64-linux-gnu ;; \
+            *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+        esac; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends "$gcc_pkg" "libc6-dev-${TARGETARCH}-cross"; \
+        rm -rf /var/lib/apt/lists/*; \
+        rustup target add "$rust_target"; \
+        target_env="$(printf '%s' "$rust_target" | tr '-' '_')"; \
+        upper="$(printf '%s' "$target_env" | tr '[:lower:]' '[:upper:]')"; \
+        export "CARGO_TARGET_${upper}_LINKER=${cross}-gcc"; \
+        export "CC_${target_env}=${cross}-gcc" "AR_${target_env}=${cross}-ar"; \
+        set -- --target "$rust_target"; \
+        debug_dir="$CARGO_TARGET_DIR/$rust_target/debug"; \
+    fi; \
+    cargo build "$@" --bin ddg-terminal-server --bin ddg-agents-host --bin ddg; \
+    install -Dt /debug-bin "$debug_dir/ddg-terminal-server" "$debug_dir/ddg-agents-host" "$debug_dir/ddg"
+
+FROM rust:1-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gdb lldb python3-lldb valgrind heaptrack binutils strace procps python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bookworm's LLDB Python package has a dangling extension link and lldb -P uses a different directory.
+ENV PYTHONPATH=/usr/lib/local/lib/python3.11/dist-packages \
+    LLDB_DEBUGSERVER_PATH=/usr/bin/lldb-server
+RUN set -eux; \
+    bindings=/usr/lib/llvm-14/lib/python3.11/dist-packages/lldb; \
+    for extension in "$bindings"/_lldb.*.so; do \
+        test -L "$extension"; \
+        ln -sfn /usr/lib/llvm-14/lib/liblldb.so.1 "$extension"; \
+    done; \
+    mkdir -p "$PYTHONPATH"; \
+    ln -s "$bindings" "$PYTHONPATH/lldb"; \
+    PYTHONPATH="$(lldb -P)" python3 -c 'import lldb; assert lldb.SBDebugger.GetVersionString()'
+
+ENV GHOSTTY_VT_LIB_DIR=/opt/ghostty-vt/lib \
+    CARGO_TARGET_DIR=/opt/ddg-target \
+    CARGO_PROFILE_DEV_DEBUG=2 \
+    CARGO_PROFILE_DEV_STRIP=none \
+    PATH=/opt/ddg-target/debug:$PATH
+
+COPY --from=vt-builder /out/lib/libghostty-vt.a /opt/ghostty-vt/lib/libghostty-vt.a
+COPY --from=rust-builder /debug-bin/ /opt/ddg-target/debug/
+WORKDIR /workspace
+COPY --from=rust-builder /workspace/ ./
+COPY scripts ./scripts
+
+EXPOSE 1234
+CMD ["lldb-server", "platform", "--server", "--listen", "*:1234"]

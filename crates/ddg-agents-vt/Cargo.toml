@@ -1,0 +1,9 @@
+[package]
+name = "ddg-agents-vt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = "0.22"
+ddg-agents-proto = { path = "../ddg-agents-proto" }

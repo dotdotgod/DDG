@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ddg-agents-proto",
+    "crates/ddg-agents-os",
+    "crates/ddg-agents-update",
+    "crates/ddg-agents-vt",
+    "crates/ddg-terminal-server",
+    "crates/ddg-agents-host",
+    "crates/ddg-agents-transport",
+    "crates/ddg-agents-cli",
+    "native",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+libc = "0.2"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "net", "io-util", "process", "sync", "time", "macros", "signal"] }

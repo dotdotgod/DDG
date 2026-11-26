@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "lldb-mcp": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["scripts/debug/lldb_mcp.py"]
+    },
+    "dap-debugger": {
+      "type": "stdio",
+      "command": "debugmcp",
+      "args": ["serve", "--stdio"]
+    }
+  }
+}

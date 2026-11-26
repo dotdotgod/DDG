@@ -1,0 +1,2402 @@
+{
+  "components": {
+    "schemas": {
+      "CloseReason": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "reason": {
+                "const": "detached",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "const": "exited",
+                "type": "string"
+              },
+              "signal": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "killed",
+                "type": "string"
+              },
+              "signal": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "server_stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "relay_replaced",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "CloseReason"
+      },
+      "PtyEvent": {
+        "$defs": {
+          "AgentState": {
+            "enum": [
+              "idle",
+              "working",
+              "blocked",
+              "done",
+              "error"
+            ],
+            "type": "string"
+          },
+          "AgentStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BlockedKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "msg": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "progress": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/AgentStatusRecord"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "state": {
+                "$ref": "#/$defs/AgentState"
+              },
+              "status_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "records",
+              "status_ms"
+            ],
+            "type": "object"
+          },
+          "AgentStatusRecord": {
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BlockedKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "msg": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "progress": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/AgentState"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updated_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "state",
+              "updated_ms"
+            ],
+            "type": "object"
+          },
+          "BlockedKind": {
+            "enum": [
+              "permission",
+              "question",
+              "auth"
+            ],
+            "type": "string"
+          },
+          "ControlLease": {
+            "properties": {
+              "conn_id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "conn_id",
+              "epoch"
+            ],
+            "type": "object"
+          },
+          "ForegroundHint": {
+            "properties": {
+              "comm": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "script_hint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "pid",
+              "comm"
+            ],
+            "type": "object"
+          },
+          "PtyInfo": {
+            "properties": {
+              "agent_status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AgentStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "controller": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ControlLease"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "foreground": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ForegroundHint"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "title": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "pty_id",
+              "pid",
+              "cols",
+              "rows"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "pty": {
+                "$ref": "#/$defs/PtyInfo"
+              },
+              "type": {
+                "const": "spawned",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "signal": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "type": {
+                "const": "resized",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id",
+              "cols",
+              "rows"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "type": {
+                "const": "cwd_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id",
+              "cwd"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "type": {
+                "const": "title_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id",
+              "title"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "controller": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ControlLease"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "type": {
+                "const": "control_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              },
+              "type": {
+                "const": "resynced",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AgentStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "const": "agent_status_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id",
+              "session_id",
+              "run_generation"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "foreground": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ForegroundHint"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "foreground_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "pty_id",
+              "session_id",
+              "run_generation"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "byte_len": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from_host_id": {
+                "type": "string"
+              },
+              "from_session_id": {
+                "type": "string"
+              },
+              "is_remote": {
+                "type": "boolean"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "external_input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "session_id",
+              "pty_id",
+              "run_generation",
+              "byte_len",
+              "from_session_id",
+              "from_host_id",
+              "is_remote"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "PtyEvent"
+      },
+      "RpcError": {
+        "$defs": {
+          "ErrorData": {
+            "properties": {
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ErrorKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ErrorKind": {
+            "enum": [
+              "invalid_params",
+              "not_found",
+              "control_denied",
+              "conflict",
+              "unavailable",
+              "host_key_mismatch",
+              "auth_required",
+              "plugin_unavailable",
+              "permission_denied",
+              "internal"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "code": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/$defs/ErrorData"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "title": "RpcError",
+        "type": "object"
+      },
+      "SessionMessage": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "data_b64": {
+                "description": "Canonical RFC 4648 base64; at most 65536 decoded bytes.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "message",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "data_b64"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "session_exited",
+                "type": "string"
+              },
+              "room_id": {
+                "type": "string"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "session_id",
+              "room_id",
+              "run_generation"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "from_host_id": {
+            "type": "string"
+          },
+          "from_session_id": {
+            "type": "string"
+          },
+          "is_remote": {
+            "type": "boolean"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "to_session_id": {
+            "description": "Destination session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "to_session_id",
+          "from_session_id",
+          "from_host_id",
+          "is_remote"
+        ],
+        "title": "SessionMessage",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Single-host terminal server: PTY lifecycle, VT snapshots, single-controller leases, session inboxes and I/O, and credit-based framed multiplexing.",
+    "title": "ddg-terminal-server",
+    "version": "0.1.0"
+  },
+  "methods": [
+    {
+      "name": "hello",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "client_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "framed": {
+                "default": false,
+                "type": "boolean"
+              },
+              "protocol_version": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "protocol_version"
+            ],
+            "title": "HelloParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "active_pty_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "app_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "boot_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "conn_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "features": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "holder_instance": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "holder_protocol_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "platform": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "protocol_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "server_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version",
+            "server_id",
+            "boot_generation",
+            "conn_id"
+          ],
+          "title": "HelloResult",
+          "type": "object"
+        }
+      },
+      "summary": "Negotiate protocol version and optionally upgrade to 9-byte binary framed mode."
+    },
+    {
+      "name": "ping",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "PingParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "boot_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "server_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "server_id",
+            "boot_generation"
+          ],
+          "title": "PingResult",
+          "type": "object"
+        }
+      },
+      "summary": "Health check returning server identity and boot generation."
+    },
+    {
+      "name": "pty.spawn",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "argv": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "default": 0,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cols",
+              "rows"
+            ],
+            "title": "PtySpawnParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pty_id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pty_id",
+            "pid"
+          ],
+          "title": "PtySpawnResult",
+          "type": "object"
+        }
+      },
+      "summary": "Spawn an OS PTY process."
+    },
+    {
+      "name": "pty.list",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "PtyListParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "AgentState": {
+              "enum": [
+                "idle",
+                "working",
+                "blocked",
+                "done",
+                "error"
+              ],
+              "type": "string"
+            },
+            "AgentStatus": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "records": {
+                  "items": {
+                    "$ref": "#/$defs/AgentStatusRecord"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "status_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "state",
+                "records",
+                "status_ms"
+              ],
+              "type": "object"
+            },
+            "AgentStatusRecord": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updated_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "state",
+                "updated_ms"
+              ],
+              "type": "object"
+            },
+            "BlockedKind": {
+              "enum": [
+                "permission",
+                "question",
+                "auth"
+              ],
+              "type": "string"
+            },
+            "ControlLease": {
+              "properties": {
+                "conn_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "epoch": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "conn_id",
+                "epoch"
+              ],
+              "type": "object"
+            },
+            "ForegroundHint": {
+              "properties": {
+                "comm": {
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "script_hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "pid",
+                "comm"
+              ],
+              "type": "object"
+            },
+            "PtyInfo": {
+              "properties": {
+                "agent_status": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cols": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "controller": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ControlLease"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "foreground": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ForegroundHint"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "run_generation": {
+                  "default": 0,
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "session_id": {
+                  "default": "",
+                  "type": "string"
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pty_id",
+                "pid",
+                "cols",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "ptys": {
+              "items": {
+                "$ref": "#/$defs/PtyInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "ptys"
+          ],
+          "title": "PtyListResult",
+          "type": "object"
+        }
+      },
+      "summary": "List live PTYs."
+    },
+    {
+      "name": "pty.subscribe",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "PtySubscribeParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "AgentState": {
+              "enum": [
+                "idle",
+                "working",
+                "blocked",
+                "done",
+                "error"
+              ],
+              "type": "string"
+            },
+            "AgentStatus": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "records": {
+                  "items": {
+                    "$ref": "#/$defs/AgentStatusRecord"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "status_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "state",
+                "records",
+                "status_ms"
+              ],
+              "type": "object"
+            },
+            "AgentStatusRecord": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updated_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "state",
+                "updated_ms"
+              ],
+              "type": "object"
+            },
+            "BlockedKind": {
+              "enum": [
+                "permission",
+                "question",
+                "auth"
+              ],
+              "type": "string"
+            },
+            "ControlLease": {
+              "properties": {
+                "conn_id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "epoch": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "conn_id",
+                "epoch"
+              ],
+              "type": "object"
+            },
+            "ForegroundHint": {
+              "properties": {
+                "comm": {
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "script_hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "pid",
+                "comm"
+              ],
+              "type": "object"
+            },
+            "PtyInfo": {
+              "properties": {
+                "agent_status": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cols": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "controller": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ControlLease"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "foreground": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ForegroundHint"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "run_generation": {
+                  "default": 0,
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "session_id": {
+                  "default": "",
+                  "type": "string"
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pty_id",
+                "pid",
+                "cols",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "ptys": {
+              "items": {
+                "$ref": "#/$defs/PtyInfo"
+              },
+              "type": "array"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "seq",
+            "ptys"
+          ],
+          "title": "PtySubscribeResult",
+          "type": "object"
+        }
+      },
+      "summary": "Subscribe to PTY lifecycle, size, title, CWD, control, agent status, and foreground changes."
+    },
+    {
+      "name": "pty.attach",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "history_lines": {
+                "default": 2000,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "want_control": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pty_id",
+              "cols",
+              "rows"
+            ],
+            "title": "PtyAttachParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ControlMode": {
+              "enum": [
+                "control",
+                "readonly"
+              ],
+              "type": "string"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cols": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "control_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/ControlMode"
+            },
+            "rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel",
+            "mode",
+            "control_epoch",
+            "cols",
+            "rows"
+          ],
+          "title": "PtyAttachResult",
+          "type": "object"
+        }
+      },
+      "summary": "Attach to a PTY stream; receives first_paint VT snapshot followed by live output."
+    },
+    {
+      "name": "pty.claim_control",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "force": {
+                "default": false,
+                "type": "boolean"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pty_id"
+            ],
+            "title": "PtyClaimControlParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "control_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "control_epoch"
+          ],
+          "title": "PtyClaimControlResult",
+          "type": "object"
+        }
+      },
+      "summary": "Claim exclusive input/resize control over a PTY."
+    },
+    {
+      "name": "pty.release_control",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pty_id"
+            ],
+            "title": "PtyReleaseControlParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "released": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "released"
+          ],
+          "title": "PtyReleaseControlResult",
+          "type": "object"
+        }
+      },
+      "summary": "Release exclusive control over a PTY."
+    },
+    {
+      "name": "pty.kill",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "pty_id"
+            ],
+            "title": "PtyKillParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "exit_code": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "signal": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "title": "PtyKillResult",
+          "type": "object"
+        }
+      },
+      "summary": "Terminate a PTY and wait for child reaping."
+    },
+    {
+      "name": "session.send",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "oneOf": [
+              {
+                "properties": {
+                  "data_b64": {
+                    "description": "Canonical RFC 4648 base64; at most 65536 decoded bytes.",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "message",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data_b64"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "exit_code": {
+                    "format": "int32",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "const": "session_exited",
+                    "type": "string"
+                  },
+                  "room_id": {
+                    "type": "string"
+                  },
+                  "run_generation": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "session_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "session_id",
+                  "room_id",
+                  "run_generation"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "from_host_id": {
+                "type": "string"
+              },
+              "from_session_id": {
+                "type": "string"
+              },
+              "is_remote": {
+                "type": "boolean"
+              },
+              "to_session_id": {
+                "description": "Destination mailbox, distinct from the exited session in a system notification.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "to_session_id",
+              "from_session_id",
+              "from_host_id",
+              "is_remote"
+            ],
+            "title": "SessionSendParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message_id"
+          ],
+          "title": "SessionSendResult",
+          "type": "object"
+        }
+      },
+      "summary": "Enqueue a message or a protected session-exit notification for a session."
+    },
+    {
+      "name": "session.recv",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "max_messages": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "wait_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session_id",
+              "max_messages",
+              "wait_ms"
+            ],
+            "title": "SessionRecvParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "SessionMessage": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "data_b64": {
+                      "description": "Canonical RFC 4648 base64; at most 65536 decoded bytes.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "message",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "data_b64"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "exit_code": {
+                      "format": "int32",
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "const": "session_exited",
+                      "type": "string"
+                    },
+                    "room_id": {
+                      "type": "string"
+                    },
+                    "run_generation": {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "session_id",
+                    "room_id",
+                    "run_generation"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "from_host_id": {
+                  "type": "string"
+                },
+                "from_session_id": {
+                  "type": "string"
+                },
+                "is_remote": {
+                  "type": "boolean"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "to_session_id": {
+                  "description": "Destination session.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message_id",
+                "to_session_id",
+                "from_session_id",
+                "from_host_id",
+                "is_remote"
+              ],
+              "type": "object"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "messages": {
+              "items": {
+                "$ref": "#/$defs/SessionMessage"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "messages"
+          ],
+          "title": "SessionRecvResult",
+          "type": "object"
+        }
+      },
+      "summary": "Receive up to max_messages from a session inbox; optionally wait wait_ms, then return an empty list if none arrived."
+    },
+    {
+      "name": "session.inbox_subscribe",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id"
+            ],
+            "title": "SessionInboxSubscribeParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "description": "Nonzero 9-byte framed channel carrying credit-controlled NDJSON SessionMessage records.",
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "title": "SessionInboxSubscribeResult",
+          "type": "object"
+        }
+      },
+      "summary": "Subscribe to a session inbox over a 9-byte framed Credit stream."
+    },
+    {
+      "name": "session.read_screen",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "lines": {
+                "format": "uint32",
+                "maximum": 2000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_bytes": {
+                "format": "uint32",
+                "maximum": 262144,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "lines",
+              "max_bytes"
+            ],
+            "title": "SessionReadScreenParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text",
+            "run_generation",
+            "truncated"
+          ],
+          "title": "SessionReadScreenResult",
+          "type": "object"
+        }
+      },
+      "summary": "Read plain UTF-8 screen text, truncating only at character boundaries."
+    },
+    {
+      "name": "session.write_input",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "data_b64": {
+                "description": "Canonical RFC 4648 base64; 1 to 65536 decoded bytes.",
+                "type": "string"
+              },
+              "expect_run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "from_host_id": {
+                "type": "string"
+              },
+              "from_session_id": {
+                "type": "string"
+              },
+              "is_remote": {
+                "type": "boolean"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "data_b64",
+              "from_session_id",
+              "from_host_id",
+              "is_remote"
+            ],
+            "title": "SessionWriteInputParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "byte_len": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "byte_len",
+            "run_generation"
+          ],
+          "title": "SessionWriteInputResult",
+          "type": "object"
+        }
+      },
+      "summary": "Write input without taking control; check the generation if supplied and publish an event with metadata only."
+    }
+  ],
+  "openrpc": "1.3.2"
+}

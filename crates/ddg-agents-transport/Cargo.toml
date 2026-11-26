@@ -1,0 +1,18 @@
+[package]
+name = "ddg-agents-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ddg-agents-os = { path = "../ddg-agents-os" }
+ddg-agents-proto = { path = "../ddg-agents-proto" }
+ddg-agents-update = { path = "../ddg-agents-update", default-features = false }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.11.1"
+tokio = { workspace = true, features = ["fs"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

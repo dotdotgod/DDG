@@ -1,0 +1,7 @@
+target/
+.git/
+docs/
+assets/
+native/
+*.log
+/tmp/

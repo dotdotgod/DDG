@@ -1,0 +1,32 @@
+name: ddg-debug
+
+x-debug: &debug
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.debug
+  init: true
+  cap_add: [SYS_PTRACE]
+  security_opt: ["seccomp=unconfined"]
+  volumes:
+    - ..:/workspace:ro
+    - cargo_registry:/usr/local/cargo/registry
+    - cargo_git:/usr/local/cargo/git
+
+services:
+  ddg-debug-arm64:
+    <<: *debug
+    platform: linux/arm64
+    profiles: [arm64]
+    ports:
+      - "127.0.0.1:${DDG_DEBUG_PORT_ARM64:-1234}:1234"
+
+  ddg-debug-amd64:
+    <<: *debug
+    platform: linux/amd64
+    profiles: [amd64]
+    ports:
+      - "127.0.0.1:${DDG_DEBUG_PORT_AMD64:-1235}:1234"
+
+volumes:
+  cargo_registry:
+  cargo_git:

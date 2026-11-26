@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Workspace debug commands. JSON is data; diagnostics go to stderr."""
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'debug'))
+import linux_debug
+import lldb_inspect
+import profile_debug
+from debug_common import DebugError, Parser, bounded, emit, error, run
+
+TARGETS = {'mac': 'aarch64-apple-darwin', 'linux-arm64': 'aarch64-unknown-linux-gnu',
+           'linux-amd64': 'x86_64-unknown-linux-gnu', 'win-x64': 'x86_64-pc-windows-gnu'}
+REQUIRED = tuple(TARGETS.values())[1:]
+TOOLS = {'rustup': 'rustup', 'cargo': 'cargo', 'rust-lldb': 'rust-lldb',
+         'python3': 'python3', 'docker': 'docker', 'objdump': 'objdump', 'otool': 'otool',
+         'dwarfdump': 'dwarfdump', 'vmmap': 'vmmap', 'heap': 'heap', 'leaks': 'leaks',
+         'sample': 'sample', 'cargo-show-asm': 'cargo-asm', 'cargo-nextest': 'cargo-nextest',
+         'samply': 'samply', 'cargo-binutils': 'rust-objdump', 'cargo-expand': 'cargo-expand',
+         'debugger-cli': 'debugger', 'MCP debugger': 'debugmcp'}
+INSTALL = {k: f'cargo install --locked {k}' for k in (
+    'cargo-show-asm', 'cargo-nextest', 'samply', 'cargo-binutils', 'cargo-expand', 'debugger-cli')}
+INSTALL['MCP debugger'] = 'npm install -g debugmcp@0.1.3 --ignore-scripts'
+NIGHTLY = 'rustup toolchain install nightly -c miri -c llvm-tools-preview -c rust-src'
+MEM_TOOLS = {'summary': ['vmmap', '-summary'], 'vmmap': ['vmmap'],
+             'heap': ['heap', '--sortBySize'], 'leaks': ['leaks'], 'sample': ['sample']}
+
+
+def environment():
+    cargo_bin = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo')) / 'bin'
+    os.environ['PATH'] = os.pathsep.join((os.environ.get('PATH', ''), str(cargo_bin)))
+    os.environ['CARGO_TERM_COLOR'] = 'never'
+    if 'GHOSTTY_VT_LIB_DIR' not in os.environ:
+        candidates = Path('/tmp').glob('ddg-vt*/ghostty-vt.xcframework/macos-arm64_x86_64')
+        for candidate in sorted(candidates, reverse=True):
+            if (candidate / 'libghostty-vt.a').is_file():
+                os.environ['GHOSTTY_VT_LIB_DIR'] = str(candidate)
+                break
+
+
+def probe(command):
+    try:
+        return run(command, timeout=5, logs=False).strip()
+    except (DebugError, OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def doctor(_):
+    tools = {}
+
+    def record(name, path=None, version=None, install=None, available=None):
+        tools[name] = {'available': bool(path or version) if available is None else available,
+                       'path': path, 'version': version, 'install': install}
+
+    for name, binary in TOOLS.items():
+        path = shutil.which(binary)
+        version = None
+        if name == 'MCP debugger' and path:
+            package = Path(path).resolve().parents[1] / 'package.json'
+            if package.is_file():
+                version = json.loads(package.read_text()).get('version')
+        elif path and (name in INSTALL or name in ('rust-lldb', 'rustup', 'cargo', 'python3', 'docker')):
+            lines = probe([path, '--version']).splitlines()
+            version = next((line.strip() for line in lines if 'LLVM version' in line),
+                           lines[0] if lines else None)
+        record(name, path, version, INSTALL.get(name))
+    record('docker compose', version=probe(['docker', 'compose', 'version']),
+           install='Install Docker Compose v2 or Docker Desktop')
+    for name in ('lldb-dap', 'lldb-mcp', 'xctrace'):
+        path = probe(['xcrun', '--find', name]) or None
+        version = probe(['xcrun', name, '--version']) if name == 'lldb-dap' and path else None
+        record(f'xcrun {name}', path, version, 'Install Xcode and select its developer directory')
+    record('nightly', version=probe(['rustc', '+nightly', '--version']), install=NIGHTLY)
+    record('miri', version=probe(['cargo', '+nightly', 'miri', '--version']), install=NIGHTLY)
+    for toolchain in ('stable', 'nightly'):
+        components = probe(['rustup', 'component', 'list', '--installed', '--toolchain', toolchain]).splitlines()
+        for component in ('llvm-tools-preview', 'rust-src'):
+            prefix = component.removesuffix('-preview')
+            present = any(line == prefix or line.startswith(prefix + '-') for line in components)
+            record(f'{toolchain}:{component}', available=present,
+                   install=f'rustup component add --toolchain {toolchain} {component}')
+        targets = probe(['rustup', 'target', 'list', '--installed', '--toolchain', toolchain]).splitlines()
+        for target in REQUIRED:
+            record(f'{toolchain}:{target}', available=target in targets,
+                   install=f'rustup target add --toolchain {toolchain} {target}')
+    vt = os.environ.get('GHOSTTY_VT_LIB_DIR')
+    record('GHOSTTY_VT_LIB_DIR', vt, available=bool(vt and (Path(vt) / 'libghostty-vt.a').is_file()),
+           install='Set GHOSTTY_VT_LIB_DIR to the directory containing libghostty-vt.a')
+    missing = [name for name, tool in tools.items() if not tool['available']]
+    if missing:
+        print('Unavailable: ' + ', '.join(missing), file=sys.stderr)
+    return {'tools': tools, 'missing': missing}, 4 if missing else 0
+
+
+def artifact(package):
+    metadata = json.loads(run(['cargo', 'metadata', '--format-version=1', '--no-deps', '--locked']))
+    for entry in metadata['packages']:
+        if entry['name'] == package:
+            if any('lib' in target['kind'] or 'rlib' in target['kind'] for target in entry['targets']):
+                return ['--lib']
+            bins = [target['name'] for target in entry['targets'] if 'bin' in target['kind']]
+            if len(bins) == 1 or package in bins:
+                return ['--bin', package if package in bins else bins[0]]
+            raise DebugError(2, f'{package} has no library or unambiguous binary')
+    raise DebugError(2, f'unknown workspace package: {package}')
+
+
+def target_flags(args):
+    return ['--target', TARGETS.get(args.target, args.target)] if args.target else []
+
+
+def asm(args):
+    if args.list and args.symbol:
+        raise DebugError(2, 'use --list or a symbol, not both')
+    command = ['cargo-asm', '-p', args.package, *artifact(args.package), *target_flags(args),
+               '--locked', '--no-color', '--' + args.format, '--json']
+    if args.rust:
+        sysroot = Path(run(['rustc', '--print', 'sysroot']).strip())
+        if not (sysroot / 'lib/rustlib/src/rust/library').is_dir():
+            raise DebugError(4, 'Rust sources are missing: rustup component add rust-src')
+        command += ['--rust', '-C', 'debuginfo=1']
+    stdout = run(command + (['--', args.symbol] if args.symbol else []))
+    try:
+        symbols = json.loads(stdout)
+    except json.JSONDecodeError:
+        if not args.symbol or not stdout.strip() or stdout.lstrip().startswith('['):
+            raise DebugError(3, 'cargo-asm returned an invalid or empty result')
+        return {'package': args.package, 'target': TARGETS.get(args.target, args.target),
+                'symbol': args.symbol, 'format': args.format, 'output': stdout.strip()}, 0
+    if not isinstance(symbols, list):
+        raise DebugError(3, 'expected a symbol list from cargo-asm')
+    result = {'package': args.package, 'target': TARGETS.get(args.target, args.target),
+              'format': args.format, 'symbols': symbols}
+    if args.symbol:
+        result.update(error=f'symbol missing or ambiguous: {args.symbol}', code=3)
+        print(result['error'], file=sys.stderr)
+        return result, 3
+    return result, 0
+
+
+TYPE = re.compile(r'type: `(.*)`: (\d+) bytes, alignment: (\d+) bytes$')
+ENTRY = re.compile(r' +(field `\.(.*)`|variant `(.*)`|end padding|padding|discriminant): (\d+) bytes'
+                   r'(?:, offset: (\d+) bytes)?(?:, alignment: (\d+) bytes)?$')
+
+
+def parse_layout(stdout, needle):
+    types, item = [], None
+    for line in stdout.splitlines():
+        if not line.startswith('print-type-size '):
+            continue
+        line = line[len('print-type-size '):]
+        if match := TYPE.fullmatch(line):
+            name, size, alignment = match.groups()
+            item = None
+            if needle in name:
+                item = dict(name=name, size=int(size), alignment=int(alignment), fields=[],
+                            padding=[], variants=[])
+                types.append(item)
+                scope, offset = item, 0
+        elif item is not None and (match := ENTRY.fullmatch(line)):
+            kind, field, variant, size, explicit, alignment = match.groups()
+            size = int(size)
+            if kind == 'discriminant':
+                item['discriminant_size'] = offset = size
+            elif variant is not None:
+                scope = dict(name=variant, size=size, fields=[], padding=[])
+                item['variants'].append(scope)
+                offset = item.get('discriminant_size', 0)
+            elif field is not None:
+                start = offset if explicit is None else int(explicit)
+                scope['fields'].append(dict(name=field, size=size, offset=start,
+                                            alignment=int(alignment) if alignment else None))
+                offset = max(offset, start + size)
+            else:
+                if kind == 'end padding':
+                    scope, offset = item, item['size'] - size
+                scope['padding'].append(dict(offset=offset, size=size))
+                offset += size
+    return types
+
+
+def layout(args):
+    if not shutil.which('rustup') or not probe(['rustc', '+nightly', '--version']):
+        raise DebugError(4, NIGHTLY)
+    command = ['cargo', '+nightly', 'rustc', '-p', args.package, *artifact(args.package),
+               *target_flags(args), '--locked']
+    # A unique metadata output defeats Cargo's fresh-result cache without rebuilding dependencies.
+    with tempfile.TemporaryDirectory(prefix='ddg-layout-') as directory:
+        stdout = run(command + ['--', '-Zprint-type-sizes', f'--emit=metadata={directory}/layout.rmeta'])
+    if 'print-type-size type: ' not in stdout:
+        raise DebugError(3, 'rustc did not emit any type layouts')
+    return {'package': args.package, 'target': TARGETS.get(args.target, args.target),
+            'types': parse_layout(stdout, args.filter)}, 0
+
+
+def memory(args):
+    if args.os != 'macos':
+        return linux_debug.memory(args)
+    if args.tool not in MEM_TOOLS:
+        raise DebugError(2, f'{args.tool} requires --os linux-arm64 or linux-amd64')
+    if sys.platform != 'darwin':
+        raise DebugError(4, 'macOS memory tools require macOS')
+    command = MEM_TOOLS[args.tool]
+    pid = args.pid
+    if pid:
+        stdout = run(command + [str(pid)], timeout=30, ok=(0, 1) if args.tool == 'leaks' else (0,))
+    elif not args.cmd:
+        raise DebugError(2, '--cmd requires an executable and optional arguments')
+    elif not shutil.which(args.cmd[0]):
+        raise DebugError(3, f'executable not found: {args.cmd[0]}')
+    elif args.tool == 'leaks':
+        stdout = run(command + ['--atExit', '--', *args.cmd], timeout=30, ok=(0, 1), cwd=Path.cwd())
+    else:
+        with subprocess.Popen(args.cmd, stdin=subprocess.DEVNULL, stdout=sys.stderr,
+                              start_new_session=True) as child:
+            pid = child.pid
+            try:
+                stdout = run(command + [str(pid)], timeout=30)
+            finally:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+    return {'os': args.os, 'tool': args.tool, 'pid': pid, 'output': stdout.strip()}, 0
+
+
+def main(argv):
+    parser = Parser(description=__doc__)
+    parser.add_argument('--json', action='store_true')
+    sub = parser.add_subparsers(dest='command', required=True)
+    for name in ('doctor', 'asm', 'layout', 'inspect', 'mem', 'linux-up', 'linux-down', 'linux-dap',
+                 'gpui-test', 'gpui-trace', 'profile'):
+        sub.add_parser(name).add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    sub.choices['asm'].add_argument('symbol', nargs='?')
+    for name in ('asm', 'layout'):
+        sub.choices[name].add_argument('-p', '--package', required=True)
+        sub.choices[name].add_argument('--target')
+    a = sub.choices['asm']
+    a.add_argument('--format', choices=('asm', 'llvm', 'mir'), default='asm')
+    a.add_argument('--list', action='store_true')
+    a.add_argument('--rust', action='store_true')
+    sub.choices['layout'].add_argument('--filter', default='')
+    lldb_inspect.options(sub.choices['inspect'])
+    m = sub.choices['mem']
+    m.add_argument('--os', choices=lldb_inspect.OS_CHOICES, required=True)
+    m.add_argument('--tool', choices=(*MEM_TOOLS, 'valgrind', 'heaptrack'), default='summary')
+    source = m.add_mutually_exclusive_group(required=True)
+    source.add_argument('--pid', type=bounded(1, 2**31 - 1))
+    source.add_argument('--cmd', nargs='+', help='executable and arguments; put --cmd -- last for raw flags')
+    for name in ('linux-up', 'linux-dap', 'linux-down'):
+        arches = (*linux_debug.ARCHES, 'all') if name == 'linux-down' else linux_debug.ARCHES
+        sub.choices[name].add_argument('--arch', choices=arches, required=True)
+    sub.choices['linux-up'].add_argument('--build', action='store_true')
+    sub.choices['linux-dap'].add_argument('--port', type=bounded(1, 65535))
+    sub.choices['gpui-test'].add_argument('--filter')
+    sub.choices['gpui-test'].add_argument('--seed', type=bounded(0, 2**64 - 1))
+    for name in ('profile', 'gpui-trace'):
+        p = sub.choices[name]
+        p.add_argument('--duration', type=bounded(1, 86400), default=10, required=name == 'profile')
+        p.add_argument('--args', nargs='*', default=[], metavar='ARG',
+                       help='debuggee arguments; put --args -- last for raw flags')
+        p.add_argument('--metal-validation', action='store_true')
+        p.add_argument('--out')
+    sub.choices['profile'].add_argument('--kind', choices=('cpu', 'metal', 'hitches', 'alloc'), required=True)
+    sub.choices['profile'].add_argument('--bin', required=True)
+    sub.choices['gpui-trace'].add_argument('--template', choices=profile_debug.TEMPLATES, default='time')
+    sub.choices['gpui-trace'].add_argument('--check-vt', action='store_true', help='validate VT without tracing')
+    command = next((arg for arg in argv if not arg.startswith('-')), None)
+    passthrough = {'inspect': '--args', 'profile': '--args', 'gpui-trace': '--args', 'mem': '--cmd'}.get(command)
+    cut = argv.index('--') if '--' in argv else len(argv)
+    flags = argv[:cut] if cut and argv[cut - 1] == passthrough else argv
+    try:
+        args = lldb_inspect.parse(parser, argv, passthrough)
+        environment()
+        if args.command == 'inspect':
+            container = sys.platform == 'darwin' and args.os in ('linux-arm64', 'linux-amd64') and not args.remote
+            emit(linux_debug.inspect(args) if container else lldb_inspect.inspect(args))
+            return 0
+        commands = {'doctor': doctor, 'asm': asm, 'layout': layout, 'mem': memory,
+                    'linux-up': linux_debug.linux_up, 'linux-down': linux_debug.linux_down,
+                    'linux-dap': linux_debug.linux_dap, 'gpui-test': profile_debug.gpui_test,
+                    'gpui-trace': profile_debug.gpui_trace, 'profile': profile_debug.profile}
+        data, code = commands[args.command](args)
+        if args.json or 'output' not in data:
+            emit(data)
+        else:
+            print(data['output'])
+        return code
+    except (DebugError, OSError, subprocess.TimeoutExpired) as exc:
+        return error(exc, '--json' in flags or command == 'inspect')
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

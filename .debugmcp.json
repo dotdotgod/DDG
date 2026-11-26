@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "adapters": {
+    "rust": {
+      "command": "/usr/bin/xcrun",
+      "args": [
+        "lldb-dap"
+      ],
+      "type": "lldb",
+      "extensions": [
+        ".rs"
+      ],
+      "transport": "stdio",
+      "launch": {
+        "program": "${file}",
+        "cwd": "${workspaceFolder}",
+        "stopOnEntry": true
+      }
+    }
+  }
+}

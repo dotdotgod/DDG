@@ -1,0 +1,30 @@
+[package]
+name = "ddg-agents-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ddg-agents-host"
+path = "src/main.rs"
+
+[dependencies]
+ddg-agents-os = { path = "../ddg-agents-os" }
+ddg-agents-update = { path = "../ddg-agents-update", default-features = false }
+sha2 = "0.10"
+zeroize = "1"
+ddg-agents-proto = { path = "../ddg-agents-proto" }
+ddg-agents-transport = { path = "../ddg-agents-transport" }
+
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+ddg-agents-vt = { path = "../ddg-agents-vt" }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["fs"] }

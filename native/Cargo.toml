@@ -1,0 +1,23 @@
+[package]
+name = "ddg-agents-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ddg-agents-os = { path = "../crates/ddg-agents-os" }
+ddg-agents-proto = { path = "../crates/ddg-agents-proto" }
+ddg-agents-transport = { path = "../crates/ddg-agents-transport" }
+ddg-agents-update = { path = "../crates/ddg-agents-update" }
+ddg-agents-vt = { path = "../crates/ddg-agents-vt" }
+gpui = "=0.2.2"
+notify = "8"
+libc = "0.2"
+roxmltree = "0.20"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }

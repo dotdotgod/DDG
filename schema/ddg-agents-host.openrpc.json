@@ -1,0 +1,6374 @@
+{
+  "components": {
+    "schemas": {
+      "Catalog": {
+        "$defs": {
+          "ExecutorSpec": {
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "default_shell",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "argv": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "env": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "command",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "argv"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "PaneNode": {
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "leaf",
+                    "type": "string"
+                  },
+                  "tab_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tab_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "axis": {
+                    "$ref": "#/$defs/SplitAxis"
+                  },
+                  "first": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "kind": {
+                    "const": "split",
+                    "type": "string"
+                  },
+                  "ratio_bp": {
+                    "description": "Share of the first pane, in basis points.",
+                    "format": "uint16",
+                    "maximum": 8500,
+                    "minimum": 1500,
+                    "type": "integer"
+                  },
+                  "second": {
+                    "$ref": "#/$defs/PaneNode"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "axis",
+                  "ratio_bp",
+                  "first",
+                  "second"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RoomKind": {
+            "enum": [
+              "standard",
+              "background"
+            ],
+            "type": "string"
+          },
+          "RoomLayout": {
+            "additionalProperties": false,
+            "properties": {
+              "groups": {
+                "items": {
+                  "$ref": "#/$defs/PaneNode"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "groups"
+            ],
+            "type": "object"
+          },
+          "RoomRecord": {
+            "properties": {
+              "auto_name": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/RoomKind"
+              },
+              "layout": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RoomLayout"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tabs": {
+                "items": {
+                  "$ref": "#/$defs/TabRecord"
+                },
+                "type": "array"
+              },
+              "visibility": {
+                "$ref": "#/$defs/RoomVisibility"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "visibility",
+              "auto_name",
+              "tabs"
+            ],
+            "type": "object"
+          },
+          "RoomVisibility": {
+            "enum": [
+              "visible",
+              "hidden"
+            ],
+            "type": "string"
+          },
+          "SplitAxis": {
+            "oneOf": [
+              {
+                "const": "horizontal",
+                "description": "Side by side: first on the left, second on the right.",
+                "type": "string"
+              },
+              {
+                "const": "vertical",
+                "description": "Stacked: first on top, second on the bottom.",
+                "type": "string"
+              }
+            ]
+          },
+          "TabRecord": {
+            "properties": {
+              "agent_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "executor": {
+                "$ref": "#/$defs/ExecutorSpec",
+                "default": {
+                  "kind": "default_shell"
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "last_cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parent_host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parent_session_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "runtime": {
+                "$ref": "#/$defs/TabRuntimeState"
+              },
+              "space_cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "run_generation",
+              "runtime"
+            ],
+            "type": "object"
+          },
+          "TabRuntimeState": {
+            "oneOf": [
+              {
+                "properties": {
+                  "pid": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "pty_id": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "running",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "pty_id",
+                  "pid"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "exited",
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "status"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "stopped_after_reboot",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/$defs/RoomRecord"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "host_id",
+          "rooms"
+        ],
+        "title": "Catalog",
+        "type": "object"
+      },
+      "CloseReason": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "reason": {
+                "const": "detached",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "reason": {
+                "const": "exited",
+                "type": "string"
+              },
+              "signal": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "killed",
+                "type": "string"
+              },
+              "signal": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "server_stopped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "const": "relay_replaced",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "CloseReason"
+      },
+      "HostEvent": {
+        "$defs": {
+          "AgentState": {
+            "enum": [
+              "idle",
+              "working",
+              "blocked",
+              "done",
+              "error"
+            ],
+            "type": "string"
+          },
+          "AgentStatus": {
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BlockedKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "msg": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "progress": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/$defs/AgentStatusRecord"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "state": {
+                "$ref": "#/$defs/AgentState"
+              },
+              "status_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "records",
+              "status_ms"
+            ],
+            "type": "object"
+          },
+          "AgentStatusRecord": {
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BlockedKind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "msg": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "progress": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/AgentState"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updated_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "state",
+              "updated_ms"
+            ],
+            "type": "object"
+          },
+          "BlockedKind": {
+            "enum": [
+              "permission",
+              "question",
+              "auth"
+            ],
+            "type": "string"
+          },
+          "ForegroundHint": {
+            "properties": {
+              "comm": {
+                "type": "string"
+              },
+              "pid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "script_hint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "pid",
+              "comm"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "activity_seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "agent_status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AgentStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "foreground": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ForegroundHint"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "room_id": {
+                "type": "string"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "seen_seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "tab_activity_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "tab_id",
+              "room_id",
+              "run_generation",
+              "activity_seq",
+              "seen_seq"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "activity_seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "seen_seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "tab_seen_changed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "tab_id",
+              "run_generation",
+              "activity_seq",
+              "seen_seq"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "byte_len": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from_host_id": {
+                "type": "string"
+              },
+              "from_session_id": {
+                "type": "string"
+              },
+              "is_remote": {
+                "type": "boolean"
+              },
+              "pty_id": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "external_input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "session_id",
+              "pty_id",
+              "run_generation",
+              "byte_len",
+              "from_session_id",
+              "from_host_id",
+              "is_remote"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "room_id": {
+                "type": "string"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "session_exited",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "session_id",
+              "room_id",
+              "run_generation"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "HostEvent"
+      },
+      "PluginHelloResult": {
+        "$defs": {
+          "PluginMethodSpec": {
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "params_schema": true,
+              "result_schema": true
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "events": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "methods": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PluginMethodSpec"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "title": "PluginHelloResult",
+        "type": "object"
+      },
+      "PluginManifest": {
+        "$defs": {
+          "PluginCapability": {
+            "enum": [
+              "host_read",
+              "host_write",
+              "pty_observe",
+              "pty_control"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "capabilities": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PluginCapability"
+            },
+            "type": "array"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "default": 10000,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "command"
+        ],
+        "title": "PluginManifest",
+        "type": "object"
+      },
+      "RelayEnvelope": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from_host_id": {
+            "description": "The hub replaces this value with the authenticated peer identity.",
+            "type": "string"
+          },
+          "hop": {
+            "description": "The host must reject hops other than 1.",
+            "format": "uint8",
+            "maximum": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "method": {
+            "type": "string"
+          },
+          "params": true,
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hop",
+          "request_id",
+          "method",
+          "params",
+          "from_host_id"
+        ],
+        "title": "RelayEnvelope",
+        "type": "object"
+      },
+      "RelayFrame": {
+        "$defs": {
+          "ErrorData": {
+            "properties": {
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ErrorKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ErrorKind": {
+            "enum": [
+              "invalid_params",
+              "not_found",
+              "control_denied",
+              "conflict",
+              "unavailable",
+              "host_key_mismatch",
+              "auth_required",
+              "plugin_unavailable",
+              "permission_denied",
+              "internal"
+            ],
+            "type": "string"
+          },
+          "RpcError": {
+            "properties": {
+              "code": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "data": {
+                "$ref": "#/$defs/ErrorData"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "data"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "from_host_id": {
+                "description": "The hub replaces this value with the authenticated peer identity.",
+                "type": "string"
+              },
+              "hop": {
+                "description": "The host must reject hops other than 1.",
+                "format": "uint8",
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "method": {
+                "type": "string"
+              },
+              "params": true,
+              "request_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "request",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "hop",
+              "request_id",
+              "method",
+              "params",
+              "from_host_id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "request_id": {
+                "type": "string"
+              },
+              "result": true,
+              "type": {
+                "const": "response",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "request_id",
+              "result"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/RpcError"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "request_id",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "title": "RelayFrame"
+      },
+      "RpcError": {
+        "$defs": {
+          "ErrorData": {
+            "properties": {
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ErrorKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ErrorKind": {
+            "enum": [
+              "invalid_params",
+              "not_found",
+              "control_denied",
+              "conflict",
+              "unavailable",
+              "host_key_mismatch",
+              "auth_required",
+              "plugin_unavailable",
+              "permission_denied",
+              "internal"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "code": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/$defs/ErrorData"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "data"
+        ],
+        "title": "RpcError",
+        "type": "object"
+      },
+      "SessionMessage": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "properties": {
+              "data_b64": {
+                "description": "Canonical RFC 4648 base64; at most 65536 decoded bytes.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "message",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "data_b64"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "exit_code": {
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "session_exited",
+                "type": "string"
+              },
+              "room_id": {
+                "type": "string"
+              },
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "session_id",
+              "room_id",
+              "run_generation"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "from_host_id": {
+            "type": "string"
+          },
+          "from_session_id": {
+            "type": "string"
+          },
+          "is_remote": {
+            "type": "boolean"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "to_session_id": {
+            "description": "Destination session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "to_session_id",
+          "from_session_id",
+          "from_host_id",
+          "is_remote"
+        ],
+        "title": "SessionMessage",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "DDG Agents entry point: room/tab catalog v2, terminal streams, authenticated session messaging and I/O, optional cross-host relay, and ext.<plugin>.* plugins.",
+    "title": "ddg-agents-host",
+    "version": "0.1.0"
+  },
+  "methods": [
+    {
+      "name": "hello",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "client_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "framed": {
+                "default": false,
+                "type": "boolean"
+              },
+              "protocol_version": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "protocol_version"
+            ],
+            "title": "HelloParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "active_pty_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "app_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "boot_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "conn_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "features": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "holder_protocol_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "host_id": {
+              "type": "string"
+            },
+            "platform": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "protocol_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rollback_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_server_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "protocol_version",
+            "host_id",
+            "boot_generation",
+            "conn_id"
+          ],
+          "title": "HostHelloResult",
+          "type": "object"
+        }
+      },
+      "summary": "Negotiate protocol version and optionally upgrade to 9-byte binary framed mode."
+    },
+    {
+      "name": "ping",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "PingParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "boot_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "server_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok",
+            "server_id",
+            "boot_generation"
+          ],
+          "title": "PingResult",
+          "type": "object"
+        }
+      },
+      "summary": "Health check verifying host and underlying ddg-terminal-server."
+    },
+    {
+      "name": "host.catalog_subscribe",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "CatalogSubscribeParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "AgentState": {
+              "enum": [
+                "idle",
+                "working",
+                "blocked",
+                "done",
+                "error"
+              ],
+              "type": "string"
+            },
+            "AgentStatus": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "records": {
+                  "items": {
+                    "$ref": "#/$defs/AgentStatusRecord"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "status_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "state",
+                "records",
+                "status_ms"
+              ],
+              "type": "object"
+            },
+            "AgentStatusRecord": {
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlockedKind"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "progress": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "$ref": "#/$defs/AgentState"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updated_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "state",
+                "updated_ms"
+              ],
+              "type": "object"
+            },
+            "BlockedKind": {
+              "enum": [
+                "permission",
+                "question",
+                "auth"
+              ],
+              "type": "string"
+            },
+            "Catalog": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "rooms": {
+                  "items": {
+                    "$ref": "#/$defs/RoomRecord"
+                  },
+                  "type": "array"
+                },
+                "schema_version": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schema_version",
+                "host_id",
+                "rooms"
+              ],
+              "type": "object"
+            },
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "ForegroundHint": {
+              "properties": {
+                "comm": {
+                  "type": "string"
+                },
+                "pid": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "script_hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "pid",
+                "comm"
+              ],
+              "type": "object"
+            },
+            "PaneNode": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "leaf",
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tab_id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "$ref": "#/$defs/SplitAxis"
+                    },
+                    "first": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "kind": {
+                      "const": "split",
+                      "type": "string"
+                    },
+                    "ratio_bp": {
+                      "description": "Share of the first pane, in basis points.",
+                      "format": "uint16",
+                      "maximum": 8500,
+                      "minimum": 1500,
+                      "type": "integer"
+                    },
+                    "second": {
+                      "$ref": "#/$defs/PaneNode"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "axis",
+                    "ratio_bp",
+                    "first",
+                    "second"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "ResetNotice": {
+              "properties": {
+                "backup_file": {
+                  "description": "Backup file basename, not an absolute path.",
+                  "type": "string"
+                },
+                "notice_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "notice_id",
+                "backup_file"
+              ],
+              "type": "object"
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomLayout": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            },
+            "RoomRecord": {
+              "properties": {
+                "auto_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "layout": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RoomLayout"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tabs": {
+                  "items": {
+                    "$ref": "#/$defs/TabRecord"
+                  },
+                  "type": "array"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "visibility",
+                "auto_name",
+                "tabs"
+              ],
+              "type": "object"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SplitAxis": {
+              "oneOf": [
+                {
+                  "const": "horizontal",
+                  "description": "Side by side: first on the left, second on the right.",
+                  "type": "string"
+                },
+                {
+                  "const": "vertical",
+                  "description": "Stacked: first on top, second on the bottom.",
+                  "type": "string"
+                }
+              ]
+            },
+            "TabActivity": {
+              "properties": {
+                "activity_seq": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "agent_status": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "foreground": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ForegroundHint"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "seen_seq": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tab_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tab_id",
+                "run_generation",
+                "activity_seq",
+                "seen_seq"
+              ],
+              "type": "object"
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "activities": {
+              "items": {
+                "$ref": "#/$defs/TabActivity"
+              },
+              "type": "array"
+            },
+            "catalog": {
+              "$ref": "#/$defs/Catalog"
+            },
+            "channel": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "reset_notice": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResetNotice"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "seq",
+            "catalog"
+          ],
+          "title": "CatalogSubscribeResult",
+          "type": "object"
+        }
+      },
+      "summary": "Fetch the room/tab catalog and tab activity snapshot and subscribe to changes."
+    },
+    {
+      "name": "host.room_create",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "ExecutorSpec": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "default_shell",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "argv": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "env": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "command",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "argv"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agent_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "executor": {
+                "$ref": "#/$defs/ExecutorSpec",
+                "default": {
+                  "kind": "default_shell"
+                }
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "space_cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cols",
+              "rows"
+            ],
+            "title": "RoomCreateParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "PaneNode": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "leaf",
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tab_id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "$ref": "#/$defs/SplitAxis"
+                    },
+                    "first": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "kind": {
+                      "const": "split",
+                      "type": "string"
+                    },
+                    "ratio_bp": {
+                      "description": "Share of the first pane, in basis points.",
+                      "format": "uint16",
+                      "maximum": 8500,
+                      "minimum": 1500,
+                      "type": "integer"
+                    },
+                    "second": {
+                      "$ref": "#/$defs/PaneNode"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "axis",
+                    "ratio_bp",
+                    "first",
+                    "second"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomLayout": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            },
+            "RoomRecord": {
+              "properties": {
+                "auto_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "layout": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RoomLayout"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tabs": {
+                  "items": {
+                    "$ref": "#/$defs/TabRecord"
+                  },
+                  "type": "array"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "visibility",
+                "auto_name",
+                "tabs"
+              ],
+              "type": "object"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SplitAxis": {
+              "oneOf": [
+                {
+                  "const": "horizontal",
+                  "description": "Side by side: first on the left, second on the right.",
+                  "type": "string"
+                },
+                {
+                  "const": "vertical",
+                  "description": "Stacked: first on top, second on the bottom.",
+                  "type": "string"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "room": {
+              "$ref": "#/$defs/RoomRecord"
+            }
+          },
+          "required": [
+            "room"
+          ],
+          "title": "RoomCreateResult",
+          "type": "object"
+        }
+      },
+      "summary": "Create a new room with its first tab."
+    },
+    {
+      "name": "host.room_rename",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "room_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "room_id"
+            ],
+            "title": "RoomRenameParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "PaneNode": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "leaf",
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tab_id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "$ref": "#/$defs/SplitAxis"
+                    },
+                    "first": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "kind": {
+                      "const": "split",
+                      "type": "string"
+                    },
+                    "ratio_bp": {
+                      "description": "Share of the first pane, in basis points.",
+                      "format": "uint16",
+                      "maximum": 8500,
+                      "minimum": 1500,
+                      "type": "integer"
+                    },
+                    "second": {
+                      "$ref": "#/$defs/PaneNode"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "axis",
+                    "ratio_bp",
+                    "first",
+                    "second"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomLayout": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            },
+            "RoomRecord": {
+              "properties": {
+                "auto_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "layout": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RoomLayout"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tabs": {
+                  "items": {
+                    "$ref": "#/$defs/TabRecord"
+                  },
+                  "type": "array"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "visibility",
+                "auto_name",
+                "tabs"
+              ],
+              "type": "object"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SplitAxis": {
+              "oneOf": [
+                {
+                  "const": "horizontal",
+                  "description": "Side by side: first on the left, second on the right.",
+                  "type": "string"
+                },
+                {
+                  "const": "vertical",
+                  "description": "Stacked: first on top, second on the bottom.",
+                  "type": "string"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "room": {
+              "$ref": "#/$defs/RoomRecord"
+            }
+          },
+          "required": [
+            "room"
+          ],
+          "title": "RoomRenameResult",
+          "type": "object"
+        }
+      },
+      "summary": "Rename a room (null reverts to auto folder name)."
+    },
+    {
+      "name": "host.room_set_layout",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "PaneNode": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "leaf",
+                        "type": "string"
+                      },
+                      "tab_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "tab_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "axis": {
+                        "$ref": "#/$defs/SplitAxis"
+                      },
+                      "first": {
+                        "$ref": "#/$defs/PaneNode"
+                      },
+                      "kind": {
+                        "const": "split",
+                        "type": "string"
+                      },
+                      "ratio_bp": {
+                        "description": "Share of the first pane, in basis points.",
+                        "format": "uint16",
+                        "maximum": 8500,
+                        "minimum": 1500,
+                        "type": "integer"
+                      },
+                      "second": {
+                        "$ref": "#/$defs/PaneNode"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "axis",
+                      "ratio_bp",
+                      "first",
+                      "second"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "RoomLayout": {
+                "additionalProperties": false,
+                "properties": {
+                  "groups": {
+                    "items": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "groups"
+                ],
+                "type": "object"
+              },
+              "SplitAxis": {
+                "oneOf": [
+                  {
+                    "const": "horizontal",
+                    "description": "Side by side: first on the left, second on the right.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "vertical",
+                    "description": "Stacked: first on top, second on the bottom.",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "layout": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RoomLayout"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "room_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "room_id"
+            ],
+            "title": "RoomSetLayoutParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "PaneNode": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "leaf",
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tab_id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "$ref": "#/$defs/SplitAxis"
+                    },
+                    "first": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "kind": {
+                      "const": "split",
+                      "type": "string"
+                    },
+                    "ratio_bp": {
+                      "description": "Share of the first pane, in basis points.",
+                      "format": "uint16",
+                      "maximum": 8500,
+                      "minimum": 1500,
+                      "type": "integer"
+                    },
+                    "second": {
+                      "$ref": "#/$defs/PaneNode"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "axis",
+                    "ratio_bp",
+                    "first",
+                    "second"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomLayout": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            },
+            "RoomRecord": {
+              "properties": {
+                "auto_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "layout": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RoomLayout"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tabs": {
+                  "items": {
+                    "$ref": "#/$defs/TabRecord"
+                  },
+                  "type": "array"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "visibility",
+                "auto_name",
+                "tabs"
+              ],
+              "type": "object"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SplitAxis": {
+              "oneOf": [
+                {
+                  "const": "horizontal",
+                  "description": "Side by side: first on the left, second on the right.",
+                  "type": "string"
+                },
+                {
+                  "const": "vertical",
+                  "description": "Stacked: first on top, second on the bottom.",
+                  "type": "string"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "room": {
+              "$ref": "#/$defs/RoomRecord"
+            }
+          },
+          "required": [
+            "room"
+          ],
+          "title": "RoomSetLayoutResult",
+          "type": "object"
+        }
+      },
+      "summary": "Replace or reset a visible room's persisted pane layout as the operator."
+    },
+    {
+      "name": "host.tab_split",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "ExecutorSpec": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "default_shell",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "argv": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "env": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "command",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "argv"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "SplitAxis": {
+                "oneOf": [
+                  {
+                    "const": "horizontal",
+                    "description": "Side by side: first on the left, second on the right.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "vertical",
+                    "description": "Stacked: first on top, second on the bottom.",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "agent_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "anchor_tab_id": {
+                "type": "string"
+              },
+              "axis": {
+                "$ref": "#/$defs/SplitAxis"
+              },
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "executor": {
+                "$ref": "#/$defs/ExecutorSpec",
+                "default": {
+                  "kind": "default_shell"
+                }
+              },
+              "ratio_bp": {
+                "description": "Defaults to 5000 (an even split) when omitted.",
+                "format": "uint16",
+                "maximum": 8500,
+                "minimum": 1500,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "space_cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "anchor_tab_id",
+              "axis",
+              "cols",
+              "rows"
+            ],
+            "title": "TabSplitParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "PaneNode": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "leaf",
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tab_id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "axis": {
+                      "$ref": "#/$defs/SplitAxis"
+                    },
+                    "first": {
+                      "$ref": "#/$defs/PaneNode"
+                    },
+                    "kind": {
+                      "const": "split",
+                      "type": "string"
+                    },
+                    "ratio_bp": {
+                      "description": "Share of the first pane, in basis points.",
+                      "format": "uint16",
+                      "maximum": 8500,
+                      "minimum": 1500,
+                      "type": "integer"
+                    },
+                    "second": {
+                      "$ref": "#/$defs/PaneNode"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "axis",
+                    "ratio_bp",
+                    "first",
+                    "second"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomLayout": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/$defs/PaneNode"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            },
+            "RoomRecord": {
+              "properties": {
+                "auto_name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "layout": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RoomLayout"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tabs": {
+                  "items": {
+                    "$ref": "#/$defs/TabRecord"
+                  },
+                  "type": "array"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "visibility",
+                "auto_name",
+                "tabs"
+              ],
+              "type": "object"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SplitAxis": {
+              "oneOf": [
+                {
+                  "const": "horizontal",
+                  "description": "Side by side: first on the left, second on the right.",
+                  "type": "string"
+                },
+                {
+                  "const": "vertical",
+                  "description": "Stacked: first on top, second on the bottom.",
+                  "type": "string"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "room": {
+              "$ref": "#/$defs/RoomRecord"
+            },
+            "tab": {
+              "$ref": "#/$defs/TabRecord"
+            }
+          },
+          "required": [
+            "room",
+            "tab"
+          ],
+          "title": "TabSplitResult",
+          "type": "object"
+        }
+      },
+      "summary": "Create a session alongside an anchor tab in a visible room as the operator."
+    },
+    {
+      "name": "host.tab_create",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "ExecutorSpec": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "default_shell",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "argv": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "env": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "command",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "argv"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "agent_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "background": {
+                "description": "Explicitly request background creation; cannot be combined with a room_id.",
+                "type": "boolean"
+              },
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "executor": {
+                "$ref": "#/$defs/ExecutorSpec",
+                "default": {
+                  "kind": "default_shell"
+                }
+              },
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "room_id": {
+                "description": "If omitted, create in the host's hidden background room.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "space_cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cols",
+              "rows"
+            ],
+            "title": "TabCreateParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "tab": {
+              "$ref": "#/$defs/TabRecord"
+            }
+          },
+          "required": [
+            "tab"
+          ],
+          "title": "TabCreateResult",
+          "type": "object"
+        }
+      },
+      "summary": "Create a tab in the chosen room, or in the hidden background room when room_id is omitted."
+    },
+    {
+      "name": "host.tab_screen",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "lines": {
+                "default": 24,
+                "format": "uint32",
+                "maximum": 2000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_bytes": {
+                "default": 262144,
+                "format": "uint32",
+                "maximum": 262144,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id"
+            ],
+            "title": "TabScreenParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text",
+            "run_generation",
+            "truncated"
+          ],
+          "title": "SessionReadScreenResult",
+          "type": "object"
+        }
+      },
+      "summary": "Read bounded UTF-8 screen text from a local tab as the operator."
+    },
+    {
+      "name": "host.tab_mark_seen",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "seen_seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "run_generation",
+              "seen_seq"
+            ],
+            "title": "TabMarkSeenParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "activity_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "seen_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tab_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "run_generation",
+            "activity_seq",
+            "seen_seq"
+          ],
+          "title": "TabMarkSeenResult",
+          "type": "object"
+        }
+      },
+      "summary": "Mark tab activity as seen for the given run generation as the operator."
+    },
+    {
+      "name": "host.tab_write",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "data_b64": {
+                "type": "string"
+              },
+              "expect_run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "data_b64"
+            ],
+            "title": "TabWriteParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "byte_len": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "byte_len",
+            "run_generation"
+          ],
+          "title": "SessionWriteInputResult",
+          "type": "object"
+        }
+      },
+      "summary": "Write to a local tab as the operator without taking control; check the generation if supplied."
+    },
+    {
+      "name": "host.tab_msg_send",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "data_b64": {
+                "type": "string"
+              },
+              "to_session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "to_session_id",
+              "data_b64"
+            ],
+            "title": "TabMsgSendParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message_id"
+          ],
+          "title": "SessionSendResult",
+          "type": "object"
+        }
+      },
+      "summary": "Send a message to a local session's inbox as the operator."
+    },
+    {
+      "name": "host.tab_move",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "SessionMoveTarget": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "existing_room",
+                        "type": "string"
+                      },
+                      "room_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "room_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "new_room",
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "tab_id": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/SessionMoveTarget"
+              }
+            },
+            "required": [
+              "tab_id",
+              "target"
+            ],
+            "title": "TabMoveParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SessionSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "session_id",
+                "room_id",
+                "room_kind",
+                "visibility",
+                "host_id",
+                "title",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionSummary"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "title": "SessionMoveResult",
+          "type": "object"
+        }
+      },
+      "summary": "Promote a local background tab into an existing or newly created visible room as the operator."
+    },
+    {
+      "name": "host.tab_attach",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "history_lines": {
+                "default": 2000,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              },
+              "want_control": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tab_id",
+              "cols",
+              "rows"
+            ],
+            "title": "TabAttachParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ControlMode": {
+              "enum": [
+                "control",
+                "readonly"
+              ],
+              "type": "string"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cols": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "control_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/ControlMode"
+            },
+            "rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "runtime": {
+              "$ref": "#/$defs/TabRuntimeState"
+            }
+          },
+          "required": [
+            "channel",
+            "run_generation",
+            "mode",
+            "control_epoch",
+            "cols",
+            "rows",
+            "runtime"
+          ],
+          "title": "TabAttachResult",
+          "type": "object"
+        }
+      },
+      "summary": "Attach to a tab's terminal stream (zero-parse passthrough to ddg-terminal-server)."
+    },
+    {
+      "name": "host.tab_claim_control",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "force": {
+                "default": false,
+                "type": "boolean"
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id"
+            ],
+            "title": "TabClaimControlParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "control_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "control_epoch"
+          ],
+          "title": "PtyClaimControlResult",
+          "type": "object"
+        }
+      },
+      "summary": "Claim exclusive input/resize control over a tab's running PTY."
+    },
+    {
+      "name": "host.tab_release_control",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id"
+            ],
+            "title": "TabReleaseControlParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "released": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "released"
+          ],
+          "title": "PtyReleaseControlResult",
+          "type": "object"
+        }
+      },
+      "summary": "Release exclusive input/resize control over a tab's running PTY."
+    },
+    {
+      "name": "host.tab_close",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id"
+            ],
+            "title": "TabCloseParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "removed_room": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "removed_room"
+          ],
+          "title": "TabCloseResult",
+          "type": "object"
+        }
+      },
+      "summary": "Explicitly terminate a tab's PTY and remove the tab (and empty room) after reaping."
+    },
+    {
+      "name": "host.tab_restart",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "cols": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "tab_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "cols",
+              "rows"
+            ],
+            "title": "TabRestartParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ExecutorSpec": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "default_shell",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "argv": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "command",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "argv"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "TabRecord": {
+              "properties": {
+                "agent_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "executor": {
+                  "$ref": "#/$defs/ExecutorSpec",
+                  "default": {
+                    "kind": "default_shell"
+                  }
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pty_id": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "space_cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "tab": {
+              "$ref": "#/$defs/TabRecord"
+            }
+          },
+          "required": [
+            "tab"
+          ],
+          "title": "TabRestartResult",
+          "type": "object"
+        }
+      },
+      "summary": "Explicitly start a new PTY on an exited or post-reboot stopped tab."
+    },
+    {
+      "name": "host.session_create",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "ExecutorSpec": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "default_shell",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "argv": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "env": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "kind": {
+                        "const": "command",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "argv"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agent_profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "executor": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExecutorSpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "idempotency_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "room_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_token": {
+                "description": "Required for session authentication; missing credentials are rejected by the host.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "title": "SessionCreateParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SessionSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "session_id",
+                "room_id",
+                "room_kind",
+                "visibility",
+                "host_id",
+                "title",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionSummary"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "title": "SessionCreateResult",
+          "type": "object"
+        }
+      },
+      "summary": "Create an authenticated session, using the hidden background room when room_id is omitted."
+    },
+    {
+      "name": "host.session_list",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "include_hidden": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "room_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token"
+            ],
+            "title": "SessionListParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "ErrorData": {
+              "properties": {
+                "code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "$ref": "#/$defs/ErrorKind"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "ErrorKind": {
+              "enum": [
+                "invalid_params",
+                "not_found",
+                "control_denied",
+                "conflict",
+                "unavailable",
+                "host_key_mismatch",
+                "auth_required",
+                "plugin_unavailable",
+                "permission_denied",
+                "internal"
+              ],
+              "type": "string"
+            },
+            "HostQueryError": {
+              "properties": {
+                "error": {
+                  "$ref": "#/$defs/RpcError"
+                },
+                "host_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host_id",
+                "error"
+              ],
+              "type": "object"
+            },
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "RpcError": {
+              "properties": {
+                "code": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "data": {
+                  "$ref": "#/$defs/ErrorData"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "data"
+              ],
+              "type": "object"
+            },
+            "SessionSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "session_id",
+                "room_id",
+                "room_kind",
+                "visibility",
+                "host_id",
+                "title",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "errors": {
+              "items": {
+                "$ref": "#/$defs/HostQueryError"
+              },
+              "type": "array"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/$defs/SessionSummary"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "sessions"
+          ],
+          "title": "SessionListResult",
+          "type": "object"
+        }
+      },
+      "summary": "List sessions, optionally including hidden sessions; multi-host queries may return sessions and per-host errors together."
+    },
+    {
+      "name": "host.session_move",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$defs": {
+              "SessionMoveTarget": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "existing_room",
+                        "type": "string"
+                      },
+                      "room_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "room_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "new_room",
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/SessionMoveTarget"
+              }
+            },
+            "required": [
+              "session_token",
+              "session_id",
+              "target"
+            ],
+            "title": "SessionMoveParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SessionSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "session_id",
+                "room_id",
+                "room_kind",
+                "visibility",
+                "host_id",
+                "title",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionSummary"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "title": "SessionMoveResult",
+          "type": "object"
+        }
+      },
+      "summary": "Move a session into an existing or newly created room."
+    },
+    {
+      "name": "host.session_close",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token",
+              "session_id"
+            ],
+            "title": "SessionCloseParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "removed_room": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "removed_room"
+          ],
+          "title": "TabCloseResult",
+          "type": "object"
+        }
+      },
+      "summary": "Close a session by its stable ID."
+    },
+    {
+      "name": "host.session_restart",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token",
+              "session_id"
+            ],
+            "title": "SessionRestartParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "RoomKind": {
+              "enum": [
+                "standard",
+                "background"
+              ],
+              "type": "string"
+            },
+            "RoomVisibility": {
+              "enum": [
+                "visible",
+                "hidden"
+              ],
+              "type": "string"
+            },
+            "SessionSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "parent_session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "room_id": {
+                  "type": "string"
+                },
+                "room_kind": {
+                  "$ref": "#/$defs/RoomKind"
+                },
+                "run_generation": {
+                  "format": "uint64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runtime": {
+                  "$ref": "#/$defs/TabRuntimeState"
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "visibility": {
+                  "$ref": "#/$defs/RoomVisibility"
+                }
+              },
+              "required": [
+                "session_id",
+                "room_id",
+                "room_kind",
+                "visibility",
+                "host_id",
+                "title",
+                "run_generation",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            "TabRuntimeState": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "pid": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pty_id": {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "const": "running",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "pty_id",
+                    "pid"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "exited",
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "const": "stopped_after_reboot",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/SessionSummary"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "title": "SessionRestartResult",
+          "type": "object"
+        }
+      },
+      "summary": "Restart a session, preserving its ID and increasing its run generation."
+    },
+    {
+      "name": "host.session_screen",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lines": {
+                "format": "uint32",
+                "maximum": 2000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_bytes": {
+                "format": "uint32",
+                "maximum": 262144,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token",
+              "session_id",
+              "lines",
+              "max_bytes"
+            ],
+            "title": "SessionScreenParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text",
+            "run_generation",
+            "truncated"
+          ],
+          "title": "SessionReadScreenResult",
+          "type": "object"
+        }
+      },
+      "summary": "Read bounded UTF-8 screen text from a session."
+    },
+    {
+      "name": "host.session_write",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "data_b64": {
+                "type": "string"
+              },
+              "expect_run_generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token",
+              "session_id",
+              "data_b64"
+            ],
+            "title": "SessionWriteParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "byte_len": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "run_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "byte_len",
+            "run_generation"
+          ],
+          "title": "SessionWriteInputResult",
+          "type": "object"
+        }
+      },
+      "summary": "Write input without taking the terminal's control lease; check the generation if supplied."
+    },
+    {
+      "name": "host.msg_send",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "data_b64": {
+                "type": "string"
+              },
+              "host_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_token": {
+                "type": "string"
+              },
+              "to_session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token",
+              "to_session_id",
+              "data_b64"
+            ],
+            "title": "MsgSendParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message_id"
+          ],
+          "title": "SessionSendResult",
+          "type": "object"
+        }
+      },
+      "summary": "Send a message to a local or relayed session."
+    },
+    {
+      "name": "host.msg_recv",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "max_messages": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "session_token": {
+                "type": "string"
+              },
+              "wait_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session_token",
+              "max_messages",
+              "wait_ms"
+            ],
+            "title": "MsgRecvParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "SessionMessage": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "data_b64": {
+                      "description": "Canonical RFC 4648 base64; at most 65536 decoded bytes.",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "message",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "data_b64"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "exit_code": {
+                      "format": "int32",
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "const": "session_exited",
+                      "type": "string"
+                    },
+                    "room_id": {
+                      "type": "string"
+                    },
+                    "run_generation": {
+                      "format": "uint64",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "session_id",
+                    "room_id",
+                    "run_generation"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
+                "from_host_id": {
+                  "type": "string"
+                },
+                "from_session_id": {
+                  "type": "string"
+                },
+                "is_remote": {
+                  "type": "boolean"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "to_session_id": {
+                  "description": "Destination session.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message_id",
+                "to_session_id",
+                "from_session_id",
+                "from_host_id",
+                "is_remote"
+              ],
+              "type": "object"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "messages": {
+              "items": {
+                "$ref": "#/$defs/SessionMessage"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "messages"
+          ],
+          "title": "SessionRecvResult",
+          "type": "object"
+        }
+      },
+      "summary": "Receive messages from the authenticated caller's inbox."
+    },
+    {
+      "name": "host.msg_subscribe",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token"
+            ],
+            "title": "MsgSubscribeParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "description": "Nonzero 9-byte framed channel carrying credit-controlled NDJSON SessionMessage records.",
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "title": "SessionInboxSubscribeResult",
+          "type": "object"
+        }
+      },
+      "summary": "Subscribe to the authenticated caller's inbox over a 9-byte framed Credit stream."
+    },
+    {
+      "name": "host.list_hosts",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "session_token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_token"
+            ],
+            "title": "ListHostsParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "HostStatus": {
+              "enum": [
+                "connected",
+                "offline"
+              ],
+              "type": "string"
+            },
+            "HostSummary": {
+              "properties": {
+                "host_id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/$defs/HostStatus"
+                }
+              },
+              "required": [
+                "host_id",
+                "label",
+                "status"
+              ],
+              "type": "object"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "hosts": {
+              "items": {
+                "$ref": "#/$defs/HostSummary"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "hosts"
+          ],
+          "title": "ListHostsResult",
+          "type": "object"
+        }
+      },
+      "summary": "List hosts with only identity, label, and status."
+    },
+    {
+      "name": "host.relay_attach",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "RelayAttachParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "channel": {
+              "description": "Nonzero 9-byte framed channel carrying credit-controlled NDJSON RelayFrame records in both directions.",
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "title": "RelayAttachResult",
+          "type": "object"
+        }
+      },
+      "summary": "Attach one bidirectional relay channel; requests and responses use the same Credit stream."
+    }
+  ],
+  "openrpc": "1.3.2"
+}

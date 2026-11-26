@@ -1,0 +1,23 @@
+services:
+  ddg-host:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ddg-agents-host:latest
+    container_name: ddg-dev
+    init: true
+    restart: unless-stopped
+    environment:
+      DDG_ENABLE_SSHD: "${DDG_ENABLE_SSHD:-0}"
+    ports:
+      # Only active when DDG_ENABLE_SSHD=1; bound to loopback by default.
+      - "127.0.0.1:2222:2222"
+    volumes:
+      - ddg_state:/home/ddg/.local/state/ddg
+      - ddg_ssh:/etc/ddg/ssh
+      - ddg_workspace:/workspace
+
+volumes:
+  ddg_state:
+  ddg_ssh:
+  ddg_workspace:

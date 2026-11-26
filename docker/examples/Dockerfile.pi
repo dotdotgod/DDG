@@ -1,0 +1,13 @@
+# Example extension image layering Node.js + coding-agent CLI (e.g. pi) on top
+# of the minimal ddg-agents-host base image.
+FROM ddg-agents-host:latest
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+# Example: install your preferred CLI agent globally
+# RUN npm install -g @mariozechner/pi-coding-agent
+
+USER ddg
+WORKDIR /workspace
