@@ -72,6 +72,8 @@ pub fn spawn_pty(
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    // macOS takes a mutable winsize pointer; Linux takes a const pointer.
+    #[allow(clippy::unnecessary_mut_passed)]
     let rc = unsafe {
         libc::openpty(
             &mut master_fd,

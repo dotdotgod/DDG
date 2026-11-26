@@ -35,7 +35,8 @@ pub fn connect_or_start(paths: &Paths) -> io::Result<LocalStream> {
             start?;
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
+    const STARTUP_TIMEOUT_SECS: u64 = 15;
+    let deadline = Instant::now() + Duration::from_secs(STARTUP_TIMEOUT_SECS);
     while Instant::now() < deadline {
         if let Ok(stream) = connect(&paths.terminal_sock) {
             return Ok(stream);
@@ -43,7 +44,7 @@ pub fn connect_or_start(paths: &Paths) -> io::Result<LocalStream> {
         std::thread::sleep(Duration::from_millis(15));
     }
     Err(io::Error::other(format!(
-        "ddg-terminal-server did not start within 5s at {}",
+        "ddg-terminal-server did not start within {STARTUP_TIMEOUT_SECS}s at {}",
         paths.terminal_sock.display()
     )))
 }

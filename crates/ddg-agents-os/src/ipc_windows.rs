@@ -1,5 +1,5 @@
 use super::{PeerCred, pipe_name};
-use crate::windows::{check, owner_sid, private_security, user_sid};
+use crate::windows::{check, is_current_owner, owner_sid, private_security};
 use std::{
     io::{self, Read, Write},
     net::Shutdown,
@@ -83,7 +83,7 @@ impl AsyncListener {
     }
 
     fn create(name: &str, first: bool) -> io::Result<NamedPipeServer> {
-        let (_descriptor, mut attrs, _) = private_security(false)?;
+        let (_descriptor, mut attrs) = private_security(false)?;
         // Tokio opens with FILE_FLAG_OVERLAPPED; the descriptor is consumed synchronously.
         unsafe {
             ServerOptions::new()
@@ -168,7 +168,7 @@ impl AsyncWrite for AsyncStream {
 fn open(name: &str) -> io::Result<AsyncStream> {
     let stream = ClientOptions::new().open(name)?;
     // Do not send anything to a pipe planted by another local user.
-    if owner_sid(stream.as_raw_handle(), SE_FILE_OBJECT)? != user_sid()? {
+    if !is_current_owner(&owner_sid(stream.as_raw_handle(), SE_FILE_OBJECT)?)? {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
     Ok(AsyncStream::Client(stream))

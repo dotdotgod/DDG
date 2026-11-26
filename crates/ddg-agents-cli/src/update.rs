@@ -218,20 +218,16 @@ async fn status(
 ) -> Result<Value> {
     let local = matches!(target.transport, HostTransport::Local { sock_path: None });
     let (current, platform, rollback, active, holder) = if local {
+        let rollback = state.rollback.as_ref().map(|record| record.version.clone());
+        #[cfg(target_os = "macos")]
+        let rollback = rollback.or_else(|| {
+            let dir = ddg_agents_os::paths::state_dir().ok()?;
+            app::rollback_version(&dir)
+        });
         (
             Some(state.current_version.clone()),
             local_platform().map(str::to_owned),
-            state
-                .rollback
-                .as_ref()
-                .map(|record| record.version.clone())
-                .or_else(|| {
-                    #[cfg(target_os = "macos")]
-                    if let Ok(dir) = ddg_agents_os::paths::state_dir() {
-                        return app::rollback_version(&dir);
-                    }
-                    None
-                }),
+            rollback,
             state
                 .pending_holder_restart
                 .as_ref()

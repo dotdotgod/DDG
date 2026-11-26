@@ -76,7 +76,7 @@ impl Sandbox {
             .unwrap();
         let pid = child.id();
         self.children.push(child);
-        self.wait_for_terminal_sock(Duration::from_secs(5));
+        self.wait_for_terminal_sock(Duration::from_secs(15));
         pid
     }
 

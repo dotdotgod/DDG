@@ -53,11 +53,14 @@ fn protected_user_only_sddl() {
 }
 
 #[cfg(all(windows, test))]
-#[test]
-fn windows_private_file_and_directory_use_a_protected_user_dacl() -> io::Result<()> {
-    use crate::windows::{LocalAlloc, check, sid_string, user_sid};
+mod windows_tests {
+    use super::{create_private_file, ensure_private_dir};
+    use crate::windows::{LocalAlloc, check, owner_sid, sid_string, user_sid};
     use std::{
+        fs::{self, File},
+        io,
         os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
+        path::Path,
         ptr::null_mut,
     };
     use windows_sys::Win32::{
@@ -65,7 +68,16 @@ fn windows_private_file_and_directory_use_a_protected_user_dacl() -> io::Result<
         Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
     };
 
-    fn verify(file: &File, inherit: u8) -> io::Result<()> {
+    const DIR_INHERIT: u8 = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+
+    fn open_dir(path: &Path) -> io::Result<File> {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    }
+
+    fn verify(file: &File, inherit: u8, expected_owner: &str) -> io::Result<()> {
         unsafe {
             let (mut sd, mut owner, mut dacl) = (null_mut(), null_mut(), null_mut());
             let error = GetSecurityInfo(
@@ -98,45 +110,55 @@ fn windows_private_file_and_directory_use_a_protected_user_dacl() -> io::Result<
             assert_eq!(ace.Header.AceType, 0); // ACCESS_ALLOWED_ACE_TYPE
             assert_eq!(ace.Header.AceFlags, inherit);
             assert_eq!(
-                EqualSid(owner, (&raw const ace.SidStart).cast_mut().cast()),
-                1
+                sid_string((&raw const ace.SidStart).cast_mut().cast())?,
+                user_sid()?
             );
-            assert_eq!(sid_string(owner)?, user_sid()?);
+            assert_eq!(sid_string(owner)?, expected_owner);
         }
         Ok(())
     }
 
-    let dir = std::env::temp_dir()
-        .join(ddg_agents_proto::id::generate_message_id().map_err(io::Error::other)?);
-    ensure_private_dir(&dir)?;
-    let result = (|| {
-        let dir_handle = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(&dir)?;
-        verify(
-            &dir_handle,
-            (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8,
-        )?;
-        let file = create_private_file(&dir.join("private.txt"))?;
-        verify(&file, 0)
-    })();
-    fs::remove_dir_all(&dir)?;
-    result
+    #[test]
+    fn windows_private_file_and_directory_use_a_protected_user_dacl() -> io::Result<()> {
+        let dir = std::env::temp_dir()
+            .join(ddg_agents_proto::id::generate_message_id().map_err(io::Error::other)?);
+        ensure_private_dir(&dir)?;
+        let result = (|| {
+            let sid = user_sid()?;
+            verify(&open_dir(&dir)?, DIR_INHERIT, &sid)?;
+            let file = create_private_file(&dir.join("private.txt"))?;
+            verify(&file, 0, &sid)
+        })();
+        fs::remove_dir_all(&dir)?;
+        result
+    }
+
+    #[test]
+    fn windows_ensure_private_dir_tightens_existing_directory() -> io::Result<()> {
+        let dir = std::env::temp_dir()
+            .join(ddg_agents_proto::id::generate_message_id().map_err(io::Error::other)?);
+        fs::create_dir(&dir)?;
+        let result = (|| {
+            let owner = owner_sid(open_dir(&dir)?.as_raw_handle(), SE_FILE_OBJECT)?;
+            ensure_private_dir(&dir)?;
+            verify(&open_dir(&dir)?, DIR_INHERIT, &owner)
+        })();
+        fs::remove_dir(&dir)?;
+        result
+    }
 }
 
 #[cfg(windows)]
 fn secure_existing(
     handle: &std::os::windows::io::OwnedHandle,
     attrs: &windows_sys::Win32::Security::SECURITY_ATTRIBUTES,
-    sid: &str,
 ) -> io::Result<()> {
-    use crate::windows::{check, owner_sid};
+    use crate::windows::{check, is_current_owner, owner_sid};
     use std::{os::windows::io::AsRawHandle, ptr::null_mut};
     use windows_sys::Win32::Security::{Authorization::*, *};
     unsafe {
         let h = handle.as_raw_handle();
-        if owner_sid(h, SE_FILE_OBJECT)? != sid {
+        if !is_current_owner(&owner_sid(h, SE_FILE_OBJECT)?)? {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         let mut dacl = null_mut();
@@ -175,7 +197,7 @@ pub fn ensure_private_dir(path: &Path) -> io::Result<()> {
         ensure_private_dir(parent)?;
     }
     let name = wide(path.as_os_str())?;
-    let (_sd, attrs, sid) = private_security(true)?;
+    let (_sd, attrs) = private_security(true)?;
     if unsafe { CreateDirectoryW(name.as_ptr(), &attrs) } == 0 {
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::AlreadyExists {
@@ -197,7 +219,7 @@ pub fn ensure_private_dir(path: &Path) -> io::Result<()> {
         if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        secure_existing(&file.into(), &attrs, &sid)?;
+        secure_existing(&file.into(), &attrs)?;
     }
     Ok(())
 }
@@ -211,7 +233,7 @@ pub(crate) fn open_private(path: &Path, new: bool) -> io::Result<File> {
         Storage::FileSystem::*,
     };
     let name = wide(path.as_os_str())?;
-    let (_sd, attrs, sid) = private_security(false)?;
+    let (_sd, attrs) = private_security(false)?;
     let handle = unsafe {
         owned(CreateFileW(
             name.as_ptr(),
@@ -232,7 +254,7 @@ pub(crate) fn open_private(path: &Path, new: bool) -> io::Result<File> {
         return Ok(file);
     }
     let handle = file.into();
-    secure_existing(&handle, &attrs, &sid)?;
+    secure_existing(&handle, &attrs)?;
     Ok(File::from(handle))
 }
 
@@ -283,7 +305,7 @@ pub fn is_current_user_file(path: &Path) -> io::Result<bool> {
         file.as_raw_handle(),
         windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT,
     )?;
-    Ok(owner == crate::windows::user_sid()?)
+    crate::windows::is_current_owner(&owner)
 }
 
 #[cfg(windows)]

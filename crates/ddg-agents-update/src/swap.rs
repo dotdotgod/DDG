@@ -2,6 +2,8 @@
 
 use crate::{UpdateError, UpdateErrorCode as Code, integrity::verify_sha256};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read},
@@ -254,14 +256,12 @@ pub(crate) fn copy_verified(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     plain_dir(parent).map_err(storage_error)?;
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
     let scratch = parent.join(format!(".ddg-copy-{}", nonce().map_err(storage_error)?));
-    builder.create(&scratch).map_err(storage_error)?;
+    #[cfg(unix)]
+    let created = fs::DirBuilder::new().mode(0o700).create(&scratch);
+    #[cfg(not(unix))]
+    let created = fs::create_dir(&scratch);
+    created.map_err(storage_error)?;
     let result = (|| {
         let name = dest
             .file_name()

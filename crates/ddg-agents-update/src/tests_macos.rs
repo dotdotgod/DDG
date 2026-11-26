@@ -1,10 +1,14 @@
 use crate::{
     UpdateErrorCode as Code,
     macos::{
-        EXPECTED_APPLE_TEAM_ID, EXPECTED_BUNDLE_ID, SwapJob, codesign_requirement,
-        macos_preflight_check, validate_helper_swap_job, verify_macos_app_bundle,
+        EXPECTED_APPLE_TEAM_ID, EXPECTED_BUNDLE_ID, codesign_requirement, macos_preflight_check,
+        verify_macos_app_bundle,
     },
     rollback::{RollbackRecord, restore_rollback_binary, verify_rollback_set},
+};
+#[cfg(unix)]
+use crate::{
+    macos::{SwapJob, validate_helper_swap_job},
     swap::{copy_or_move_preserving_backup, gc_stale_tombstones, make_tombstone_name},
 };
 use std::{collections::BTreeMap, fs};

@@ -15,8 +15,8 @@ use windows_sys::Win32::{
             ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
             GetSecurityInfo, SE_OBJECT_TYPE,
         },
-        GetTokenInformation, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-        TOKEN_USER, TokenUser,
+        GetTokenInformation, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES, TOKEN_OWNER,
+        TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
     },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
@@ -53,6 +53,20 @@ impl Drop for LocalAlloc {
 }
 
 pub fn user_sid() -> io::Result<String> {
+    token_sid(false)
+}
+
+fn token_owner_sid() -> io::Result<String> {
+    token_sid(true)
+}
+
+// An elevated token can default to the Administrators group as owner.
+pub fn is_current_owner(owner: &str) -> io::Result<bool> {
+    Ok(owner == user_sid()? || owner == token_owner_sid()?)
+}
+
+fn token_sid(owner: bool) -> io::Result<String> {
+    let class = if owner { TokenOwner } else { TokenUser };
     unsafe {
         let mut token = null_mut();
         check(OpenProcessToken(
@@ -62,19 +76,24 @@ pub fn user_sid() -> io::Result<String> {
         ))?;
         let token = owned(token)?;
         let mut len = 0;
-        GetTokenInformation(token.as_raw_handle(), TokenUser, null_mut(), 0, &mut len);
+        GetTokenInformation(token.as_raw_handle(), class, null_mut(), 0, &mut len);
         if len == 0 {
             return Err(io::Error::last_os_error());
         }
         let mut buf = vec![0usize; (len as usize).div_ceil(size_of::<usize>())];
         check(GetTokenInformation(
             token.as_raw_handle(),
-            TokenUser,
+            class,
             buf.as_mut_ptr().cast(),
             len,
             &mut len,
         ))?;
-        sid_string((*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid)
+        let sid = if owner {
+            (*buf.as_ptr().cast::<TOKEN_OWNER>()).Owner
+        } else {
+            (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid
+        };
+        sid_string(sid)
     }
 }
 
@@ -90,7 +109,7 @@ pub unsafe fn sid_string(sid: *mut c_void) -> io::Result<String> {
     }
 }
 
-pub fn private_security(directory: bool) -> io::Result<(LocalAlloc, SECURITY_ATTRIBUTES, String)> {
+pub fn private_security(directory: bool) -> io::Result<(LocalAlloc, SECURITY_ATTRIBUTES)> {
     let sid = user_sid()?;
     let sddl = wide(OsStr::new(&crate::fs::private_sddl(&sid, directory)))?;
     let mut descriptor = null_mut();
@@ -109,7 +128,6 @@ pub fn private_security(directory: bool) -> io::Result<(LocalAlloc, SECURITY_ATT
             lpSecurityDescriptor: descriptor,
             bInheritHandle: 0,
         },
-        sid,
     ))
 }
 

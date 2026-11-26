@@ -71,9 +71,13 @@ pub fn gc_stale_tombstones(dir: &Path) -> io::Result<usize> {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            };
             options
                 .write(true)
+                // GC removes the tombstone before releasing this handle.
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
                 .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         if !entry.file_type().is_ok_and(|t| t.is_file()) {
@@ -213,6 +217,7 @@ mod tests {
     #[test]
     fn replace_gc_retries_windows_sharing_violation() -> io::Result<()> {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
         let dir = std::env::temp_dir()
             .join(ddg_agents_proto::id::generate_message_id().map_err(io::Error::other)?);
         crate::fs::ensure_private_dir(&dir)?;
@@ -220,7 +225,7 @@ mod tests {
         fs::write(&path, b"v1")?;
         let held = fs::OpenOptions::new()
             .read(true)
-            .share_mode(1)
+            .share_mode(FILE_SHARE_READ)
             .open(&path)?;
         assert_eq!(gc_stale_tombstones(&dir)?, 0);
         drop(held);

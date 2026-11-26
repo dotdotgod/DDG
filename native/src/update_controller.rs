@@ -277,7 +277,9 @@ pub struct VersionInfo {
     pub app_version: Option<String>,
     pub platform: Option<String>,
     pub terminal_server_version: Option<String>,
+    #[cfg(target_os = "macos")]
     pub holder_protocol_version: Option<u32>,
+    #[cfg(target_os = "macos")]
     pub active_pty_count: Option<u32>,
     pub rollback_version: Option<String>,
 }

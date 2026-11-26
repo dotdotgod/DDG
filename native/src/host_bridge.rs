@@ -259,14 +259,19 @@ impl HostBridge {
                         app_version,
                         platform,
                         terminal_server_version,
+                        #[cfg(target_os = "macos")]
                         holder_protocol_version,
+                        #[cfg(target_os = "macos")]
                         active_pty_count,
                         rollback_version,
+                        ..
                     } => BridgeEvent::VersionInfo(crate::update_controller::VersionInfo {
                         app_version,
                         platform,
                         terminal_server_version,
+                        #[cfg(target_os = "macos")]
                         holder_protocol_version,
+                        #[cfg(target_os = "macos")]
                         active_pty_count,
                         rollback_version,
                     }),

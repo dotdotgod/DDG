@@ -38,10 +38,10 @@ jobs:
         run: scripts/release/setup-windows.ps1
       - run: rustup update stable --no-self-update
       - run: rustup component add clippy --toolchain stable
-      - run: cargo +stable test --locked --workspace
+      - run: cargo +stable test --locked --workspace --no-fail-fast
       - run: cargo +stable clippy --locked --workspace --all-targets -- -D warnings
       - name: Check OpenRPC schemas
-        run: cargo +stable test --locked -p ddg-agents-proto openrpc_schemas_are_valid_and_up_to_date
+        run: cargo +stable test --locked --no-fail-fast -p ddg-agents-proto openrpc_schemas_are_valid_and_up_to_date
       - name: Smoke test native version (including release-only shaders)
         run: cargo +stable run --locked --release -p ddg-agents-native -- --version
 
@@ -69,9 +69,9 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends clang cmake pkg-config
               rustup component add clippy
-              cargo test --locked --workspace --exclude ddg-agents-native
+              cargo test --locked --workspace --exclude ddg-agents-native --no-fail-fast
               cargo clippy --locked --workspace --exclude ddg-agents-native --all-targets -- -D warnings
-              cargo test --locked -p ddg-agents-proto openrpc_schemas_are_valid_and_up_to_date
+              cargo test --locked --no-fail-fast -p ddg-agents-proto openrpc_schemas_are_valid_and_up_to_date
               cargo run --locked -p ddg-agents-cli -- --version
               cargo run --locked -p ddg-agents-host -- --version
               cargo run --locked -p ddg-terminal-server -- --version

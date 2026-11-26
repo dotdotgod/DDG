@@ -1,4 +1,6 @@
 use crate::{UpdateError, UpdateErrorCode as Code};
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
@@ -133,15 +135,11 @@ struct Staging<'a> {
 
 impl<'a> Staging<'a> {
     fn new(dir: &'a Path) -> Result<Self, UpdateError> {
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder
-            .create(dir)
-            .map_err(|e| UpdateError::new(Code::InstallDirNotWritable, e.to_string()))?;
+        let created = fs::DirBuilder::new().mode(0o700).create(dir);
+        #[cfg(not(unix))]
+        let created = fs::create_dir(dir);
+        created.map_err(|e| UpdateError::new(Code::InstallDirNotWritable, e.to_string()))?;
         Ok(Self {
             dir,
             explicit: HashSet::new(),
@@ -259,15 +257,21 @@ impl<'a> Staging<'a> {
                 self.validate_link(path, target)?;
             }
         }
+        #[cfg(unix)]
         for (path, node) in &self.nodes {
             if let Node::Link(target) = node {
-                #[cfg(unix)]
                 std::os::unix::fs::symlink(target, self.dir.join(path)).map_err(archive_error)?;
-                #[cfg(not(unix))]
-                return Err(unsafe_archive(
-                    "Archive symlinks are not supported on this platform",
-                ));
             }
+        }
+        #[cfg(not(unix))]
+        if self
+            .nodes
+            .values()
+            .any(|node| matches!(node, Node::Link(_)))
+        {
+            return Err(unsafe_archive(
+                "Archive symlinks are not supported on this platform",
+            ));
         }
         self.complete = true;
         Ok(())
