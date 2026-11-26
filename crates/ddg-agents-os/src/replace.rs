@@ -101,6 +101,7 @@ pub fn gc_stale_tombstones(dir: &Path) -> io::Result<usize> {
 mod tests {
     use super::*;
     use crate::lock::FileLock;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn replace_twice_while_first_tombstone_is_locked() -> io::Result<()> {
@@ -134,7 +135,16 @@ mod tests {
             assert_eq!(gc_stale_tombstones(&dir)?, 1);
             assert!(old.exists());
             drop(lock);
-            assert_eq!(gc_stale_tombstones(&dir)?, 1);
+            // A parallel fork can retain the flock until exec.
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let removed = gc_stale_tombstones(&dir)?;
+                if removed != 0 || Instant::now() >= deadline {
+                    assert_eq!(removed, 1);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
             Ok(())
         })();
         fs::remove_dir_all(dir)?;

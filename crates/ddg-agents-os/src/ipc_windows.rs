@@ -378,8 +378,20 @@ async fn ipc_pipe_accepts_multiple_clients_and_reports_pid() -> io::Result<()> {
     }
     drop(clients);
     drop(listener);
-    let _rebound = LocalListener::bind(&path)
-        .and_then(LocalListener::into_tokio)
-        .map_err(at("rebind"))?;
+    // Windows can retain the pipe name briefly after the handles are dropped.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let _rebound = loop {
+        match LocalListener::bind(&path) {
+            Err(e)
+                if e.kind() == io::ErrorKind::PermissionDenied
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            result => break result,
+        }
+    }
+    .and_then(LocalListener::into_tokio)
+    .map_err(at("rebind"))?;
     Ok(())
 }

@@ -191,6 +191,9 @@ pub fn spawn_pty(
             size_of::<HANDLE>(),
         ),
     ];
+    let mut startup = STARTUPINFOEXW::default();
+    // Leave stdio null so ConPTY supplies it instead of the parent's redirected handles.
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     // Job assignment is part of CreateProcessW: the child cannot run outside it.
     let process = unsafe {
         spawn_extended(
@@ -198,7 +201,7 @@ pub fn spawn_pty(
             &args,
             (!cwd.trim().is_empty()).then(|| Path::new(cwd)),
             &env,
-            STARTUPINFOEXW::default(),
+            startup,
             &attrs,
             0,
             false,
@@ -237,10 +240,17 @@ fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
     pty.resize(100, 32)?;
     let mut output = pty.reader()?;
     let (echo, echoed) = std::sync::mpsc::channel();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&seen);
     std::thread::spawn(move || {
         // ConPTY can omit newlines; reserve the first byte for split matches.
         let mut buf = [0; 4097];
         while let Ok(n @ 1..) = output.read(&mut buf[1..]) {
+            {
+                let mut seen = captured.lock().unwrap();
+                let len = n.min(1024 - seen.len());
+                seen.extend_from_slice(&buf[1..1 + len]);
+            }
             if buf[..=n].windows(2).any(|w| w == b"ok") {
                 let _ = echo.send(());
                 let _ = io::copy(&mut output, &mut io::sink());
@@ -267,7 +277,14 @@ fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
     };
     echoed
         .recv_timeout(Duration::from_secs(15))
-        .expect("cmd.exe did not echo ok");
+        .unwrap_or_else(|err| {
+            let seen = seen.lock().unwrap();
+            panic!(
+                "cmd.exe did not echo ok ({err}); active processes: {}; output: {:?}",
+                active(),
+                String::from_utf8_lossy(&seen)
+            );
+        });
     assert!(active() >= 2, "descendant never joined the ConPTY job");
     pty.writer()?.write_all(b"continue\r")?;
     let (reaped, exit) = std::sync::mpsc::channel();
