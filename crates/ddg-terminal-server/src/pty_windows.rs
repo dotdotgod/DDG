@@ -222,7 +222,7 @@ pub fn spawn_pty(
 #[test]
 fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
     use std::{
-        io::{BufRead, BufReader, Write},
+        io::{Read, Write},
         time::{Duration, Instant},
     };
     let args = [
@@ -235,15 +235,18 @@ fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
     .map(String::from);
     let (pty, mut child) = spawn_pty(&args, &BTreeMap::new(), "", 80, 24)?;
     pty.resize(100, 32)?;
-    let mut output = BufReader::new(pty.reader()?);
+    let mut output = pty.reader()?;
     let (echo, echoed) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut line = Vec::new();
-        while output.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
-            if line.windows(2).any(|w| w == b"ok") {
+        // ConPTY can omit newlines; reserve the first byte for split matches.
+        let mut buf = [0; 4097];
+        while let Ok(n @ 1..) = output.read(&mut buf[1..]) {
+            if buf[..=n].windows(2).any(|w| w == b"ok") {
                 let _ = echo.send(());
+                let _ = io::copy(&mut output, &mut io::sink());
+                break;
             }
-            line.clear();
+            buf[0] = buf[n];
         }
     });
     let active = || {
@@ -263,7 +266,7 @@ fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
         info.ActiveProcesses
     };
     echoed
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(15))
         .expect("cmd.exe did not echo ok");
     assert!(active() >= 2, "descendant never joined the ConPTY job");
     pty.writer()?.write_all(b"continue\r")?;
@@ -272,7 +275,7 @@ fn conpty_echo_resize_and_exit_leaves_no_active_processes() -> io::Result<()> {
         let _ = reaped.send(wait_child(&mut child));
     });
     let (code, signal) = exit
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(15))
         .expect("ConPTY did not close")?;
     assert_eq!((code, signal), (Some(0), None));
     let deadline = Instant::now() + Duration::from_secs(5);

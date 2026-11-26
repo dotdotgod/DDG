@@ -1,24 +1,30 @@
 use super::{PeerCred, pipe_name};
-use crate::windows::{check, is_current_owner, owner_sid, private_security};
+use crate::windows::{check, is_current_owner, owned, owner_sid, private_security, wide};
 use std::{
+    ffi::OsStr,
     io::{self, Read, Write},
     net::Shutdown,
-    os::windows::io::{AsRawHandle, RawHandle},
+    os::windows::io::{AsRawHandle, IntoRawHandle, RawHandle},
     path::Path,
     pin::Pin,
+    ptr::{from_mut, null, null_mut},
     sync::{Arc, OnceLock},
     task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, ReadHalf, WriteHalf},
-    net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
+    net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions},
     runtime::Runtime,
     sync::{Mutex, watch},
 };
 use windows_sys::Win32::{
-    Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY},
-    Security::Authorization::SE_FILE_OBJECT,
+    Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE},
+    Security::Authorization::SE_KERNEL_OBJECT,
+    Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, READ_CONTROL, SECURITY_IDENTIFICATION,
+        SECURITY_SQOS_PRESENT,
+    },
     System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId},
 };
 
@@ -83,17 +89,16 @@ impl AsyncListener {
     }
 
     fn create(name: &str, first: bool) -> io::Result<NamedPipeServer> {
+        let mut options = ServerOptions::new();
+        options
+            .first_pipe_instance(first)
+            .reject_remote_clients(true);
+        if !first {
+            return options.create(name);
+        }
         let (_descriptor, mut attrs) = private_security(false)?;
         // Tokio opens with FILE_FLAG_OVERLAPPED; the descriptor is consumed synchronously.
-        unsafe {
-            ServerOptions::new()
-                .first_pipe_instance(first)
-                .reject_remote_clients(true)
-                .create_with_security_attributes_raw(
-                    name,
-                    (&mut attrs as *mut windows_sys::Win32::Security::SECURITY_ATTRIBUTES).cast(),
-                )
-        }
+        unsafe { options.create_with_security_attributes_raw(name, from_mut(&mut attrs).cast()) }
     }
 
     pub async fn accept(&self) -> io::Result<(AsyncStream, ())> {
@@ -166,12 +171,24 @@ impl AsyncWrite for AsyncStream {
 }
 
 fn open(name: &str) -> io::Result<AsyncStream> {
-    let stream = ClientOptions::new().open(name)?;
+    let name = wide(OsStr::new(name))?;
+    let handle = unsafe {
+        owned(CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+            0,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+            null_mut(),
+        ))?
+    };
     // Do not send anything to a pipe planted by another local user.
-    if !is_current_owner(&owner_sid(stream.as_raw_handle(), SE_FILE_OBJECT)?)? {
+    if !is_current_owner(&owner_sid(handle.as_raw_handle(), SE_KERNEL_OBJECT)?)? {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
-    Ok(AsyncStream::Client(stream))
+    // Tokio takes ownership of the overlapped pipe handle.
+    unsafe { NamedPipeClient::from_raw_handle(handle.into_raw_handle()) }.map(AsyncStream::Client)
 }
 
 pub async fn connect_async(path: &Path) -> io::Result<AsyncStream> {
@@ -336,19 +353,33 @@ impl Write for LocalStream {
 #[tokio::test]
 async fn ipc_pipe_accepts_multiple_clients_and_reports_pid() -> io::Result<()> {
     let path = std::env::temp_dir().join(ddg_agents_proto::id::generate_message_id().unwrap());
-    let listener = LocalListener::bind(&path)?.into_tokio()?;
-    assert!(LocalListener::bind(&path).is_err());
+    let at = |step| move |e: io::Error| io::Error::new(e.kind(), format!("{step}: {e}"));
+    let listener = LocalListener::bind(&path)
+        .and_then(LocalListener::into_tokio)
+        .map_err(at("initial bind"))?;
+    assert!(
+        LocalListener::bind(&path).is_err(),
+        "duplicate bind succeeded"
+    );
     let mut clients = Vec::new();
     for byte in [1, 2] {
-        let mut client = connect_async(&path).await?;
-        let (mut server, ()) = listener.accept().await?;
-        assert_eq!(peer_credentials(&server)?.pid, Some(std::process::id()));
-        client.write_all(&[byte]).await?;
-        assert_eq!(server.read_u8().await?, byte);
+        let at = |step| {
+            move |e: io::Error| io::Error::new(e.kind(), format!("client {byte} {step}: {e}"))
+        };
+        let mut client = connect_async(&path).await.map_err(at("connect"))?;
+        let (mut server, ()) = listener.accept().await.map_err(at("accept"))?;
+        assert_eq!(
+            peer_credentials(&server).map_err(at("peer PID"))?.pid,
+            Some(std::process::id())
+        );
+        client.write_all(&[byte]).await.map_err(at("write"))?;
+        assert_eq!(server.read_u8().await.map_err(at("read"))?, byte);
         clients.push((client, server));
     }
     drop(clients);
     drop(listener);
-    let _rebound = LocalListener::bind(&path)?.into_tokio()?;
+    let _rebound = LocalListener::bind(&path)
+        .and_then(LocalListener::into_tokio)
+        .map_err(at("rebind"))?;
     Ok(())
 }

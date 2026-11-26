@@ -102,17 +102,26 @@ mod windows_tests {
                 &mut revision,
             ))?;
             assert_ne!(control & SE_DACL_PROTECTED, 0);
-            assert!(!dacl.is_null());
-            assert_eq!((*dacl).AceCount, 1);
-            let mut ace = null_mut();
-            check(GetAce(dacl, 0, &mut ace))?;
-            let ace = &*ace.cast::<ACCESS_ALLOWED_ACE>();
-            assert_eq!(ace.Header.AceType, 0); // ACCESS_ALLOWED_ACE_TYPE
-            assert_eq!(ace.Header.AceFlags, inherit);
-            assert_eq!(
-                sid_string((&raw const ace.SidStart).cast_mut().cast())?,
-                user_sid()?
-            );
+            assert!(!dacl.is_null() && (*dacl).AceCount >= 1);
+            let sid = user_sid()?;
+            let mut combined_flags = 0;
+            for index in 0..(*dacl).AceCount {
+                let mut ace = null_mut();
+                check(GetAce(dacl, u32::from(index), &mut ace))?;
+                assert_eq!((*ace.cast::<ACE_HEADER>()).AceType, 0); // ACCESS_ALLOWED_ACE_TYPE
+                let ace = &*ace.cast::<ACCESS_ALLOWED_ACE>();
+                assert_eq!(
+                    sid_string((&raw const ace.SidStart).cast_mut().cast())?,
+                    sid
+                );
+                combined_flags |= ace.Header.AceFlags;
+            }
+            // SetSecurityInfo can split a directory grant into direct and inheritable ACEs.
+            if inherit == 0 {
+                assert_eq!(combined_flags, 0);
+            } else {
+                assert_eq!(combined_flags & inherit, inherit);
+            }
             assert_eq!(sid_string(owner)?, expected_owner);
         }
         Ok(())

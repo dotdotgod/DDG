@@ -481,6 +481,8 @@ impl Holder {
             let mut st = self.lock();
             let grace = if st.intentional_leave {
                 Duration::from_secs(60)
+            } else if st.generation == 0 {
+                self.grace.max(Duration::from_secs(5))
             } else {
                 self.grace
             };
