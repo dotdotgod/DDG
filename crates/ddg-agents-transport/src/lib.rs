@@ -20,8 +20,9 @@ pub use dial::{
     dial_with_policy, sanitize_dial_error,
 };
 pub use install::{
-    RemoteInstallInfo, RemotePlatform, ResolvedBinaries, build_atomic_upload_script,
-    default_dist_dir, install_remote_host, parse_uname_output,
+    RemoteInstallInfo, RemotePlatform, ResolvedBinaries, VerifiedDaemonPair,
+    build_atomic_upload_script, default_dist_dir, install_remote_host,
+    install_remote_host_with_resolver, parse_uname_output,
 };
 pub use profile::{
     HostProfile, HostTransport, HostsConfig, discover_docker_containers, discover_ssh_config_hosts,

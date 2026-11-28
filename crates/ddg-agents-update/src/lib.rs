@@ -2,6 +2,8 @@
 
 #[cfg(feature = "network")]
 pub mod archive;
+#[cfg(feature = "network")]
+pub mod bootstrap;
 pub mod cache;
 pub mod config;
 pub mod error;

@@ -133,6 +133,14 @@ pub enum RemotePlatform {
 }
 
 impl RemotePlatform {
+    pub fn is_darwin(&self) -> bool {
+        matches!(self, Self::DarwinArm64 | Self::DarwinX86_64)
+    }
+
+    fn requires_verified_release(self) -> bool {
+        self.is_darwin() && Some(self) != Self::current()
+    }
+
     pub fn slug(&self) -> &'static str {
         match self {
             Self::DarwinArm64 => "darwin-arm64",
@@ -197,6 +205,35 @@ pub struct ResolvedBinaries {
     pub terminal_server_bin: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedDaemonPair {
+    pub host_bin: PathBuf,
+    pub host_sha256: String,
+    pub terminal_server_bin: PathBuf,
+    pub terminal_server_sha256: String,
+}
+
+impl From<ddg_agents_update::UpdateError> for DialError {
+    fn from(error: ddg_agents_update::UpdateError) -> Self {
+        use ddg_agents_update::UpdateErrorCode as Code;
+        let kind = match error.code {
+            Code::CodesignInvalid
+            | Code::NotarizationInvalid
+            | Code::ChecksumMismatch
+            | Code::SignatureInvalid
+            | Code::SignatureMissing
+            | Code::ArchiveUnsafe
+            | Code::DisallowedUrlOrHost
+            | Code::HostSecurityBlocked
+            | Code::ManifestInvalid
+            | Code::ProtocolIncompatible
+            | Code::RedirectLimitExceeded => DialErrorKind::SecurityBlocked,
+            _ => DialErrorKind::Unavailable,
+        };
+        DialError::new(kind, error.to_string())
+    }
+}
+
 impl ResolvedBinaries {
     fn if_present(host_bin: PathBuf, terminal_server_bin: PathBuf) -> Option<Self> {
         (host_bin.is_file() && terminal_server_bin.is_file()).then_some(Self {
@@ -236,6 +273,9 @@ pub fn resolve_cached_or_local_binaries_in(
     dist_dir: Option<&Path>,
     workspace_root: Option<&Path>,
 ) -> Option<ResolvedBinaries> {
+    if platform.requires_verified_release() {
+        return None;
+    }
     if Some(platform) == RemotePlatform::current() {
         let overrides = || {
             ResolvedBinaries::if_present(
@@ -288,6 +328,11 @@ pub async fn resolve_or_build_binaries(
     platform: RemotePlatform,
     progress: Option<&mpsc::UnboundedSender<String>>,
 ) -> Result<ResolvedBinaries, DialError> {
+    if platform.requires_verified_release() {
+        return Err(unavailable(
+            "cross-architecture macOS remote install requires a verified release resolver",
+        ));
+    }
     if let Some(bins) = resolve_cached_or_local_binaries(platform) {
         return Ok(bins);
     }
@@ -308,7 +353,7 @@ pub async fn resolve_or_build_binaries(
     progress_stage(
         progress,
         format!(
-            "{} 원격 바이너리 빌드 중 (최초 1회, Docker BuildKit)...",
+            "{} Building remote binary (first time only, Docker BuildKit)...",
             platform.slug()
         ),
     );
@@ -641,10 +686,104 @@ async fn verify_installed_host(profile: &HostProfile) -> Result<String, DialErro
     }
 }
 
+async fn release_payload(path: &Path, digest: String) -> Result<(Vec<u8>, String), DialError> {
+    let blocked = |e: io::Error| DialError::new(DialErrorKind::SecurityBlocked, e.to_string());
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = opts.open(path).await.map_err(blocked)?;
+    // Bound the re-read by the updater's archive extraction limit, even if the cache changes.
+    const MAX_BYTES: u64 = 512 * 1024 * 1024;
+    let meta = file.metadata().await.map_err(blocked)?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_BYTES {
+        return Err(blocked(io::Error::other("invalid cached daemon file")));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(blocked)?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+        return Err(blocked(io::Error::other("invalid cached daemon size")));
+    }
+    verify_sha256(bytes.as_slice(), &digest)?;
+    Ok((bytes, digest.to_ascii_lowercase()))
+}
+
+async fn resolve_install_payloads<F, Fut>(
+    platform: RemotePlatform,
+    progress: Option<&mpsc::UnboundedSender<String>>,
+    cross_darwin_resolver: F,
+) -> Result<Vec<(&'static str, (Vec<u8>, String))>, DialError>
+where
+    F: FnOnce(RemotePlatform, Option<mpsc::UnboundedSender<String>>) -> Fut,
+    Fut: std::future::Future<Output = Result<VerifiedDaemonPair, DialError>>,
+{
+    if platform.requires_verified_release() {
+        let pair = cross_darwin_resolver(platform, progress.cloned()).await?;
+        return Ok(vec![
+            (
+                TERMINAL_BIN,
+                release_payload(&pair.terminal_server_bin, pair.terminal_server_sha256).await?,
+            ),
+            (
+                HOST_BIN,
+                release_payload(&pair.host_bin, pair.host_sha256).await?,
+            ),
+        ]);
+    }
+    let bins = resolve_or_build_binaries(platform, progress).await?;
+    let cache = default_dist_dir().filter(|root| bins.host_bin.starts_with(root));
+    let cache_dir = if let Some(root) = &cache {
+        let dir = root.join(platform.slug());
+        ensure_private_dir(root)
+            .and_then(|()| ensure_private_dir(&dir))
+            .map_err(|e| {
+                DialError::new(
+                    DialErrorKind::SecurityBlocked,
+                    format!("secure binary cache: {e}"),
+                )
+            })?;
+        Some(dir)
+    } else {
+        None
+    };
+    // Verify both artifacts before changing either remote binary.
+    let mut payloads = Vec::new();
+    for (name, path) in [
+        (TERMINAL_BIN, &bins.terminal_server_bin),
+        (HOST_BIN, &bins.host_bin),
+    ] {
+        payloads.push((
+            name,
+            verified_install_payload(path, cache_dir.as_deref(), name).await?,
+        ));
+    }
+    Ok(payloads)
+}
+
 pub async fn install_remote_host(
     profile: &HostProfile,
     progress: Option<mpsc::UnboundedSender<String>>,
 ) -> Result<RemoteInstallInfo, DialError> {
+    install_remote_host_with_resolver(profile, progress, |_, _| async {
+        Err(unavailable(
+            "cross-architecture macOS remote install requires a verified release resolver",
+        ))
+    })
+    .await
+}
+
+pub async fn install_remote_host_with_resolver<F, Fut>(
+    profile: &HostProfile,
+    progress: Option<mpsc::UnboundedSender<String>>,
+    cross_darwin_resolver: F,
+) -> Result<RemoteInstallInfo, DialError>
+where
+    F: FnOnce(RemotePlatform, Option<mpsc::UnboundedSender<String>>) -> Fut,
+    Fut: std::future::Future<Output = Result<VerifiedDaemonPair, DialError>>,
+{
     profile
         .validate()
         .map_err(|e| DialError::new(DialErrorKind::InvalidProfile, e))?;
@@ -676,9 +815,9 @@ pub async fn install_remote_host(
     };
     let ssh = |command: &str| build_ssh_command(port, known_hosts, identity, &target, command);
     let progress = progress.as_ref();
-    progress_stage(progress, "원격 호스트 신원 확인 중...");
+    progress_stage(progress, "Verifying remote host identity...");
     let upgrade = verify_install_target(profile).await?;
-    progress_stage(progress, "원격 플랫폼 확인 중...");
+    progress_stage(progress, "Detecting remote platform...");
     let output = run_ssh(
         ssh(PROBE_COMMAND),
         None,
@@ -687,35 +826,9 @@ pub async fn install_remote_host(
     )
     .await?;
     let platform = parse_uname_output(&String::from_utf8_lossy(&output)).map_err(unavailable)?;
-    let bins = resolve_or_build_binaries(platform, progress).await?;
-    let cache = default_dist_dir().filter(|root| bins.host_bin.starts_with(root));
-    let cache_dir = if let Some(root) = &cache {
-        let dir = root.join(platform.slug());
-        ensure_private_dir(root)
-            .and_then(|()| ensure_private_dir(&dir))
-            .map_err(|e| {
-                DialError::new(
-                    DialErrorKind::SecurityBlocked,
-                    format!("secure binary cache: {e}"),
-                )
-            })?;
-        Some(dir)
-    } else {
-        None
-    };
-    // Verify both artifacts before changing either remote binary.
-    let mut payloads = Vec::new();
-    for (name, path) in [
-        (TERMINAL_BIN, &bins.terminal_server_bin),
-        (HOST_BIN, &bins.host_bin),
-    ] {
-        payloads.push((
-            name,
-            verified_install_payload(path, cache_dir.as_deref(), name).await?,
-        ));
-    }
+    let payloads = resolve_install_payloads(platform, progress, cross_darwin_resolver).await?;
     for (name, (bytes, digest)) in payloads {
-        progress_stage(progress, format!("{name} 업로드 중..."));
+        progress_stage(progress, format!("Uploading {name}..."));
         let script =
             atomic_upload_script_with_hash(name, bytes.len(), &digest).map_err(unavailable)?;
         run_ssh(
@@ -727,7 +840,7 @@ pub async fn install_remote_host(
         .await?;
     }
     if upgrade {
-        progress_stage(progress, "원격 호스트와 코어 재시작 중...");
+        progress_stage(progress, "Restarting remote host and core...");
         let script = format!("sh -c '{}'", RESTART_SERVICES.replace('\'', "'\\''"));
         run_ssh(
             ssh(&script),
@@ -737,7 +850,7 @@ pub async fn install_remote_host(
         )
         .await?;
     }
-    progress_stage(progress, "설치 완료 확인 및 연결 중...");
+    progress_stage(progress, "Verifying installation and connecting...");
     Ok(RemoteInstallInfo {
         host_id: verify_installed_host(profile).await?,
         platform,
@@ -1032,6 +1145,117 @@ sleep() {
         assert!(lookup().is_none());
         let expected = write_pair(&cache);
         assert_eq!(lookup(), Some(expected));
+    }
+
+    #[tokio::test]
+    async fn cross_darwin_requires_verified_bytes_before_any_upload() {
+        let platform = if RemotePlatform::current() == Some(RemotePlatform::DarwinX86_64) {
+            RemotePlatform::DarwinArm64
+        } else {
+            RemotePlatform::DarwinX86_64
+        };
+        let tmp = TempDir::new("verified-darwin");
+        let bins = write_pair(&tmp.0.join(platform.slug()));
+        write_pair(&tmp.0.join("target/release"));
+        assert!(
+            resolve_cached_or_local_binaries_in(platform, Some(&tmp.0), Some(&tmp.0)).is_none()
+        );
+        let pair = VerifiedDaemonPair {
+            host_bin: bins.host_bin,
+            host_sha256: sha256_hex(HOST_BIN.as_bytes()),
+            terminal_server_bin: bins.terminal_server_bin,
+            terminal_server_sha256: sha256_hex(TERMINAL_BIN.as_bytes()),
+        };
+        let resolve = || {
+            resolve_install_payloads(platform, None, |requested, _| {
+                assert_eq!(requested, platform);
+                std::future::ready(Ok(pair.clone()))
+            })
+        };
+        assert_eq!(resolve().await.unwrap().len(), 2);
+        for bytes in ["tampered", ""] {
+            std::fs::write(&pair.host_bin, bytes).unwrap();
+            assert_eq!(
+                resolve().await.unwrap_err().kind,
+                DialErrorKind::SecurityBlocked
+            );
+        }
+        std::fs::remove_file(&pair.host_bin).unwrap();
+        assert_eq!(
+            resolve().await.unwrap_err().kind,
+            DialErrorKind::SecurityBlocked
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_darwin_install_rejects_changed_host_before_first_upload() {
+        use std::os::unix::fs::PermissionsExt;
+        const FIXTURE: &str = "DDG_TEST_CROSS_DARWIN_SSH";
+        if let Some(dir) = std::env::var_os(FIXTURE) {
+            assert_eq!(std::env::var_os("PATH").as_ref(), Some(&dir));
+            let bins = ResolvedBinaries::in_dir(Path::new(&dir)).unwrap();
+            let profile = HostProfile {
+                transport: HostTransport::Ssh {
+                    target: "fixture.invalid".into(),
+                    port: None,
+                    known_hosts_file: None,
+                    identity_file: None,
+                },
+                ..HostProfile::local_default()
+            };
+            let error = install_remote_host_with_resolver(&profile, None, |_, _| async {
+                Ok(VerifiedDaemonPair {
+                    host_bin: bins.host_bin,
+                    host_sha256: sha256_hex(b"original host bytes"),
+                    terminal_server_bin: bins.terminal_server_bin,
+                    terminal_server_sha256: sha256_hex(TERMINAL_BIN.as_bytes()),
+                })
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.kind, DialErrorKind::SecurityBlocked);
+            assert!(error.message.contains("SHA-256"));
+            return;
+        }
+        // Isolate PATH from parallel tests. Only preflight and uname are allowed to reach ssh.
+        let tmp = TempDir::new("mock-ssh");
+        write_pair(&tmp.0);
+        let ssh = tmp.0.join("ssh");
+        let arch = if RemotePlatform::current() == Some(RemotePlatform::DarwinX86_64) {
+            "arm64"
+        } else {
+            "x86_64"
+        };
+        std::fs::write(
+            &ssh,
+            format!(
+                r#"#!/bin/sh
+case "$*" in
+    *DDG_HOST_NOT_INSTALLED*) read -r line; echo DDG_HOST_NOT_INSTALLED >&2; exit 127 ;;
+    *DDG_UNAME*) : > "$DDG_TEST_CROSS_DARWIN_SSH/probed"; echo 'DDG_UNAME:Darwin:{arch}' ;;
+    *) : > "$DDG_TEST_CROSS_DARWIN_SSH/unexpected"; exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "install::tests::cross_darwin_install_rejects_changed_host_before_first_upload",
+            ])
+            .env(FIXTURE, &tmp.0)
+            .env("PATH", &tmp.0)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert!(tmp.0.join("probed").is_file());
+        assert!(!tmp.0.join("unexpected").exists());
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 GPUI와 네이티브 `libghostty-vt 1.0.1`을 사용하는 멀티 호스트 데스크톱 터미널·에이전트 워크스페이스입니다. 각 호스트(로컬 Mac · 원격 서버 · Docker 컨테이너)에서 `ddg-terminal-server` + `ddg-agents-host` 한 쌍이 실행되어 PTY와 룸·탭 카탈로그를 지속 보관하며, 공식 GPUI 클라이언트(`native/`)나 OpenRPC 기반 커스텀 클라이언트가 4종 트랜스포트(로컬 소켓 · OpenSSH · `docker exec -i` · 컨테이너 SSHD)로 접속합니다.
 
+## macOS 설치
+
+Apple Silicon은 `ddg-agents-<버전>-darwin-arm64.app.zip`, Intel Mac은 `ddg-agents-<버전>-darwin-x86_64.app.zip`을 선택하세요. 압축을 풀고 `DDG Agents.app`을 쓰기 가능한 Applications 폴더(예: `~/Applications`)로 옮긴 뒤 실행하세요. Intel 최소 macOS는 아직 실기 검증 전입니다(앱 선언 11.0, Ghostty VT Intel 슬라이스 13.0).
+
+Apple Silicon에서 빈 Intel Mac에 SSH 설치하면 CLI와 GUI 모두 클라이언트와 같은 릴리스를 받아 검증합니다. 오프라인에서는 같은 버전의 캐시를 다시 검증하며, 서명되지 않은 바이너리로 대체하지 않습니다.
+
 ## 워크스페이스 구성
 
 - `crates/ddg-agents-proto`: 9B 바이너리 프레이밍, JSON-RPC 2.0, `pty.*`·`host.*`·`ext.*` 계약 및 OpenRPC 1.3 스키마 자동 생성([schema/ddg-terminal-server.openrpc.json](schema/ddg-terminal-server.openrpc.json), [schema/ddg-agents-host.openrpc.json](schema/ddg-agents-host.openrpc.json))

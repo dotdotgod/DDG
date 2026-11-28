@@ -20,6 +20,7 @@ DESKTOP = (*HEADLESS, "ddg-agents-native")
 MAC_CONTENTS = "DDG Agents.app/Contents/"
 PLATFORMS = {
     "darwin-arm64": ("app.zip", MAC_CONTENTS + "MacOS/", "", DESKTOP),
+    "darwin-x86_64": ("app.zip", MAC_CONTENTS + "MacOS/", "", DESKTOP),
     "linux-x86_64": ("tar.gz", "", "", HEADLESS),
     "linux-aarch64": ("tar.gz", "", "", HEADLESS),
     "windows-x86_64": ("zip", "", ".exe", DESKTOP),

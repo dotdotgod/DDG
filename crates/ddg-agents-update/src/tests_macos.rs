@@ -2,7 +2,7 @@ use crate::{
     UpdateErrorCode as Code,
     macos::{
         EXPECTED_APPLE_TEAM_ID, EXPECTED_BUNDLE_ID, codesign_requirement, macos_preflight_check,
-        verify_macos_app_bundle,
+        verify_macho_arch, verify_macos_app_bundle,
     },
     rollback::{RollbackRecord, restore_rollback_binary, verify_rollback_set},
 };
@@ -14,6 +14,95 @@ use crate::{
 use std::{collections::BTreeMap, fs};
 
 const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+#[test]
+fn macho_thin_and_universal_architectures() {
+    const INTEL: (&str, u32) = ("darwin-x86_64", 0x0100_0007);
+    const ARM: (&str, u32) = ("darwin-arm64", 0x0100_000c);
+    fn thin(cpu: u32, big_endian: bool) -> [u8; 32] {
+        let bytes = |value: u32| {
+            if big_endian {
+                value.to_be_bytes()
+            } else {
+                value.to_le_bytes()
+            }
+        };
+        let mut header = [0; 32];
+        header[..4].copy_from_slice(&bytes(0xfeed_facf));
+        header[4..8].copy_from_slice(&bytes(cpu));
+        header
+    }
+    fn fat(cpus: &[u32], fat64: bool) -> Vec<u8> {
+        let magic = if fat64 {
+            0xcafe_babfu32
+        } else {
+            0xcafe_babeu32
+        };
+        let entry_len = if fat64 { 32 } else { 20 };
+        let mut bytes = Vec::from(magic.to_be_bytes());
+        bytes.extend((cpus.len() as u32).to_be_bytes());
+        for (index, &cpu) in cpus.iter().enumerate() {
+            let offset = bytes.len() + entry_len * (cpus.len() - index) + 32 * index;
+            bytes.extend(cpu.to_be_bytes());
+            bytes.extend([0; 4]); // CPU subtype
+            if fat64 {
+                bytes.extend((offset as u64).to_be_bytes());
+                bytes.extend(32u64.to_be_bytes());
+                bytes.extend([0; 8]);
+            } else {
+                bytes.extend((offset as u32).to_be_bytes());
+                bytes.extend(32u32.to_be_bytes());
+                bytes.extend([0; 4]);
+            }
+        }
+        for &cpu in cpus {
+            bytes.extend(thin(cpu, false));
+        }
+        bytes
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("daemon");
+    let check = |bytes: &[u8], intel: bool, arm: bool| {
+        fs::write(&bin, bytes).unwrap();
+        for (platform, passes) in [(INTEL.0, intel), (ARM.0, arm)] {
+            let result = verify_macho_arch(&bin, platform);
+            if passes {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().code, Code::ArchiveUnsafe);
+            }
+        }
+    };
+    for big_endian in [false, true] {
+        check(&thin(INTEL.1, big_endian), true, false);
+        check(&thin(ARM.1, big_endian), false, true);
+    }
+    for fat64 in [false, true] {
+        let both = fat(&[INTEL.1, ARM.1], fat64);
+        check(&both, true, true);
+        check(&fat(&[ARM.1], fat64), false, true);
+        check(&both[..both.len() - 1], false, false);
+        let mut mismatched = fat(&[INTEL.1], fat64);
+        let slice = mismatched.len() - 32;
+        mismatched[slice..].copy_from_slice(&thin(ARM.1, false));
+        check(&mismatched, false, false);
+    }
+    let mut elf = [0; 32];
+    elf[..4].copy_from_slice(b"\x7fELF");
+    for bad in [
+        elf.as_slice(),
+        b"#! /bin/sh\necho not an executable\n",
+        &thin(INTEL.1, false)[..8],
+        b"\xca\xfe\xba\xbe\x00\x00\x00\x11",
+    ] {
+        check(bad, false, false);
+    }
+    assert_eq!(
+        verify_macho_arch(&bin, "linux-x86_64").unwrap_err().code,
+        Code::AssetNotFound
+    );
+}
 
 #[test]
 fn macos_and_rollback_preflight_and_pinned_requirement() {

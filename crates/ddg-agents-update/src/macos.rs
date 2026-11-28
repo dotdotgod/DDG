@@ -20,6 +20,98 @@ use {crate::swap::nonce, std::io};
 pub const EXPECTED_APPLE_TEAM_ID: &str = "PLACEHOLDER_TEAM_ID";
 pub const EXPECTED_BUNDLE_ID: &str = "com.dotdotgod.agents";
 
+pub(crate) fn macho_cpu(platform: &str) -> Result<u32, UpdateError> {
+    match platform {
+        "darwin-arm64" => Ok(0x0100_000c),
+        "darwin-x86_64" => Ok(0x0100_0007),
+        _ => Err(UpdateError::new(
+            Code::AssetNotFound,
+            "Unsupported Darwin platform",
+        )),
+    }
+}
+
+/// Check the CPU type in a thin Mach-O header or a matching universal slice.
+pub fn verify_macho_arch(path: &Path, expected_platform: &str) -> Result<(), UpdateError> {
+    use std::io::{Seek, SeekFrom};
+
+    fn thin_cpu(header: &[u8; 32]) -> Option<u32> {
+        let magic = u32::from_le_bytes(header[..4].try_into().unwrap());
+        let cpu = header[4..8].try_into().unwrap();
+        match magic {
+            0xfeed_facf => Some(u32::from_le_bytes(cpu)),
+            0xcffa_edfe => Some(u32::from_be_bytes(cpu)),
+            _ => None,
+        }
+    }
+
+    fn matches_cpu(path: &Path, expected: u32) -> std::io::Result<bool> {
+        let mut file = open_regular(path)?;
+        let mut header = [0; 32];
+        file.read_exact(&mut header[..8])?;
+        let entry_len = match u32::from_be_bytes(header[..4].try_into().unwrap()) {
+            0xcafe_babe => 20,
+            0xcafe_babf => 32,
+            _ => {
+                file.read_exact(&mut header[8..])?;
+                return Ok(thin_cpu(&header) == Some(expected));
+            }
+        };
+
+        let count = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
+        if !(1..=16).contains(&count) {
+            return Ok(false);
+        }
+        let mut table = [0; 16 * 32];
+        let table = &mut table[..count * entry_len];
+        file.read_exact(table)?;
+        let len = file.metadata()?.len();
+        let first_slice = (8 + table.len()) as u64;
+        let mut matched = false;
+        for entry in table.chunks_exact(entry_len) {
+            let cpu = u32::from_be_bytes(entry[..4].try_into().unwrap());
+            let (offset, size) = if entry_len == 20 {
+                (
+                    u32::from_be_bytes(entry[8..12].try_into().unwrap()).into(),
+                    u32::from_be_bytes(entry[12..16].try_into().unwrap()).into(),
+                )
+            } else {
+                (
+                    u64::from_be_bytes(entry[8..16].try_into().unwrap()),
+                    u64::from_be_bytes(entry[16..24].try_into().unwrap()),
+                )
+            };
+            if offset < first_slice
+                || size < 28
+                || offset.checked_add(size).is_none_or(|end| end > len)
+            {
+                return Ok(false);
+            }
+            if cpu == expected {
+                if size < header.len() as u64 {
+                    return Ok(false);
+                }
+                file.seek(SeekFrom::Start(offset))?;
+                file.read_exact(&mut header)?;
+                if thin_cpu(&header) != Some(expected) {
+                    return Ok(false);
+                }
+                matched = true;
+            }
+        }
+        Ok(matched)
+    }
+
+    let expected = macho_cpu(expected_platform)?;
+    if !matches!(matches_cpu(path, expected), Ok(true)) {
+        return Err(UpdateError::new(
+            Code::ArchiveUnsafe,
+            format!("Mach-O binary does not match target platform {expected_platform}"),
+        ));
+    }
+    Ok(())
+}
+
 pub fn codesign_requirement(team_id: &str, bundle_id: &str) -> String {
     format!(
         r#"anchor apple generic and identifier "{bundle_id}" and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "{team_id}""#

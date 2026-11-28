@@ -41,8 +41,15 @@ jobs:
               print(f'version={version}', file=f)
           PY
 
-  macos-arm64:
+  macos:
+    name: ${{ matrix.platform }}
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin-arm64, target: aarch64-apple-darwin, arch: arm64, native_smoke: true }
+          - { platform: darwin-x86_64, target: x86_64-apple-darwin, arch: x86_64, native_smoke: false }
     runs-on: macos-15
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -50,10 +57,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - run: scripts/release/setup-macos.sh
+      - run: scripts/release/setup-macos.sh --target-arch "${{ matrix.arch }}"
       - run: rustup update stable --no-self-update
-      - run: cargo +stable build --locked --release --bins
-      - run: target/release/ddg-agents-native --version
+      - run: rustup target add "${{ matrix.target }}" --toolchain stable
+      - run: cargo +stable build --locked --release --bins --target "${{ matrix.target }}"
+      - if: matrix.native_smoke
+        run: target/${{ matrix.target }}/release/ddg-agents-native --version
       - name: Sign, notarize and staple the app
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
@@ -96,10 +105,10 @@ jobs:
           security list-keychains -d user -s "$keychain"
           # Keep archive members' normal permissions; the secret directory is already private.
           umask 022
-          scripts/release/package-macos.sh --sign --bin-dir target/release --version "$VERSION" --out-dir dist
+          scripts/release/package-macos.sh --sign --platform "${{ matrix.platform }}" --bin-dir "target/${{ matrix.target }}/release" --version "$VERSION" --out-dir dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-darwin-arm64
+          name: release-${{ matrix.platform }}
           path: dist/*.app.zip
           if-no-files-found: error
           compression-level: 0
@@ -182,7 +191,7 @@ jobs:
           compression-level: 0
 
   publish:
-    needs: [prepare, macos-arm64, linux, windows-x86_64]
+    needs: [prepare, macos, linux, windows-x86_64]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

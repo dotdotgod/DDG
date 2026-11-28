@@ -59,7 +59,7 @@ impl HostProfile {
     pub fn local_default() -> Self {
         Self {
             id: "local".into(),
-            label: "로컬".into(),
+            label: "Local".into(),
             transport: HostTransport::Local { sock_path: None },
             expected_host_id: None,
         }
@@ -407,7 +407,7 @@ pub fn split_safe_tokens(raw: &str) -> Result<Vec<String>, String> {
 pub fn parse_ssh_input(raw: &str) -> Result<HostTransport, String> {
     let tokens = split_safe_tokens(raw)?;
     if tokens.is_empty() {
-        return Err("SSH 대상 또는 명령어를 입력해 주세요.".into());
+        return Err("Enter an SSH target or command.".into());
     }
 
     // Plain single target (no leading `ssh` command).
@@ -504,7 +504,7 @@ pub fn parse_ssh_input(raw: &str) -> Result<HostTransport, String> {
                     )?;
                 }
                 other => {
-                    return Err(format!("지원하지 않는 SSH 옵션입니다: {other}"));
+                    return Err(format!("Unsupported SSH option: {other}"));
                 }
             }
             idx += 1;
@@ -520,7 +520,7 @@ pub fn parse_ssh_input(raw: &str) -> Result<HostTransport, String> {
         }
     }
 
-    let raw_target = target.ok_or("SSH 대상 호스트를 찾을 수 없습니다.")?;
+    let raw_target = target.ok_or("Could not find an SSH target host.")?;
     let final_target = match user {
         Some(u) if !raw_target.contains('@') => format!("{u}@{raw_target}"),
         _ => raw_target,
@@ -575,7 +575,7 @@ fn apply_safe_ssh_option(
         | "serveralivecountmax" => {}
         "stricthostkeychecking" if val.eq_ignore_ascii_case("yes") => {}
         _ => {
-            return Err(format!("보안상 허용되지 않는 SSH -o 옵션입니다: {k}"));
+            return Err(format!("SSH -o option is blocked for security: {k}"));
         }
     }
     Ok(())
@@ -586,7 +586,7 @@ fn apply_safe_ssh_option(
 pub fn parse_docker_input(raw: &str) -> Result<String, String> {
     let tokens = split_safe_tokens(raw)?;
     if tokens.is_empty() {
-        return Err("컨테이너 이름을 입력해 주세요.".into());
+        return Err("Enter a container name.".into());
     }
     if tokens.len() == 1 {
         validate_docker_container(&tokens[0])?;
@@ -613,9 +613,9 @@ pub fn parse_docker_input(raw: &str) -> Result<String, String> {
             validate_docker_container(t)?;
             return Ok(t.clone());
         }
-        return Err("docker exec 명령에서 컨테이너 이름을 찾을 수 없습니다.".into());
+        return Err("Could not find a container name in the docker exec command.".into());
     }
-    Err("유효한 컨테이너 이름 또는 `docker exec ...` 명령어를 입력해 주세요.".into())
+    Err("Enter a valid container name or `docker exec ...` command.".into())
 }
 
 /// Reads non-wildcard `Host` aliases from `~/.ssh/config` for quick selection.
@@ -675,6 +675,23 @@ pub fn discover_docker_containers() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_local_label_does_not_replace_a_saved_label() {
+        let mut config = HostsConfig::default();
+        assert_eq!(config.hosts[0].id, "local");
+        assert_eq!(config.hosts[0].label, "Local");
+
+        let custom_label = "\u{b85c}\u{ceec}";
+        config.hosts[0].label = custom_label.into();
+        let dir = std::env::temp_dir().join(ddg_agents_proto::id::generate_message_id().unwrap());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("hosts.json");
+        config.save(&path).unwrap();
+        let loaded = HostsConfig::load_or_default(&path);
+        fs::remove_dir_all(dir).unwrap();
+        assert_eq!(loaded, config);
+    }
 
     #[test]
     fn rejects_reserved_invalid_and_duplicate_profile_ids() {
@@ -741,6 +758,10 @@ mod tests {
     #[test]
     fn parses_ssh_commands_safely_and_blocks_unsafe_options() {
         assert_eq!(
+            parse_ssh_input("").unwrap_err(),
+            "Enter an SSH target or command."
+        );
+        assert_eq!(
             parse_ssh_input("dotdot-home").unwrap(),
             HostTransport::Ssh {
                 target: "dotdot-home".into(),
@@ -779,6 +800,10 @@ mod tests {
 
     #[test]
     fn parses_docker_exec_command_and_ssh_config_aliases() {
+        assert_eq!(
+            parse_docker_input("docker exec -it").unwrap_err(),
+            "Could not find a container name in the docker exec command."
+        );
         assert_eq!(
             parse_docker_input("docker exec -it ddg-dev /bin/zsh").unwrap(),
             "ddg-dev"

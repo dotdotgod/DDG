@@ -7,8 +7,8 @@ use crate::{
 };
 use ddg_agents_transport::{
     DialError, DialErrorKind, HostProfile, HostTransport, HostsConfig, RemoteInstallInfo,
-    dial_and_handshake, discover_docker_containers, discover_ssh_config_hosts, install_remote_host,
-    parse_docker_input, parse_ssh_input,
+    dial_and_handshake, discover_docker_containers, discover_ssh_config_hosts,
+    install_remote_host_with_resolver, parse_docker_input, parse_ssh_input,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -28,8 +28,23 @@ async fn handshake(
 }
 
 async fn install(profile: &HostProfile, out: Output) -> Result<RemoteInstallInfo> {
+    let resolve = |platform: ddg_agents_transport::RemotePlatform,
+                   progress: Option<mpsc::UnboundedSender<String>>| async move {
+        let pair = ddg_agents_update::bootstrap::resolve_verified_darwin_daemons(
+            platform.slug(),
+            env!("CARGO_PKG_VERSION"),
+            progress.as_ref(),
+        )
+        .await?;
+        Ok(ddg_agents_transport::VerifiedDaemonPair {
+            host_bin: pair.host_bin,
+            host_sha256: pair.host_sha256,
+            terminal_server_bin: pair.terminal_server_bin,
+            terminal_server_sha256: pair.terminal_server_sha256,
+        })
+    };
     if out.0 {
-        return Ok(install_remote_host(profile, None).await?);
+        return Ok(install_remote_host_with_resolver(profile, None, resolve).await?);
     }
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let progress = async {
@@ -37,7 +52,10 @@ async fn install(profile: &HostProfile, out: Output) -> Result<RemoteInstallInfo
             eprintln!("[ddg] {}", diagnostic(&stage));
         }
     };
-    let (result, ()) = tokio::join!(install_remote_host(profile, Some(tx)), progress);
+    let (result, ()) = tokio::join!(
+        install_remote_host_with_resolver(profile, Some(tx), resolve),
+        progress
+    );
     Ok(result?)
 }
 
