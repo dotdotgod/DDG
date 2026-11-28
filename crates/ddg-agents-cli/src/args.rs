@@ -10,6 +10,10 @@ Commands:
   run [agent] [--room <room_id> | --new-room [--name <name>] | --bg | --background]
               [--cwd <dir>] [--title <title>] [--cols <n>] [--rows <n>] [-- <args...>]
   agent (a) ls | show <id> [--reveal-env]
+  agent presets [--no-detect]                      List built-in presets for one host
+  agent add --preset <id> [--label <label>] [--icon <icon>] [--cwd <dir>]
+                          [--env KEY=VALUE] [--default]
+  agent add --detected                             Add missing detected presets for one host
   agent add | set <id> [--label <label>] [--icon <icon>] [--cwd <dir>] [--default]
                      [--env KEY=VALUE] [--unset-env KEY] [--host-override <host>]
                      [--clear-host-override <host>] [-- <argv...>]
@@ -69,6 +73,7 @@ pub enum Action {
     Run,
     AgentLs,
     AgentShow,
+    AgentPresets,
     AgentAdd,
     AgentSet,
     AgentDefault,
@@ -220,6 +225,7 @@ pub fn parse(raw: &[String]) -> Result<Args<'_>> {
                 match *sub {
                     "ls" => AgentLs,
                     "show" => AgentShow,
+                    "presets" => AgentPresets,
                     "add" => AgentAdd,
                     "set" => AgentSet,
                     "default" => AgentDefault,
@@ -314,6 +320,7 @@ pub fn parse(raw: &[String]) -> Result<Args<'_>> {
             1,
         ),
         AgentShow => (&[], &["reveal-env"], 1, 1),
+        AgentPresets => (&[], &["no-detect"], 0, 0),
         AgentAdd | AgentSet => (
             &[
                 "label",
@@ -323,9 +330,10 @@ pub fn parse(raw: &[String]) -> Result<Args<'_>> {
                 "unset-env",
                 "host-override",
                 "clear-host-override",
+                "preset",
             ],
-            &["default"],
-            1,
+            &["default", "detected"],
+            usize::from(action == AgentSet),
             1,
         ),
         AgentDefault => (&[], &["clear"], 0, 1),
@@ -452,7 +460,10 @@ pub fn parse(raw: &[String]) -> Result<Args<'_>> {
                 return Err(Error::usage("expected a command after --"));
             }
             args.argv = tail.into_iter().map(str::to_owned).collect();
-        } else if matches!(action, AgentLs | AgentShow | AgentDefault | AgentRm) {
+        } else if matches!(
+            action,
+            AgentLs | AgentShow | AgentPresets | AgentDefault | AgentRm
+        ) {
             return Err(Error::usage("unexpected --; see ddg --help"));
         } else {
             args.pos.extend(tail);
@@ -509,6 +520,22 @@ pub fn parse(raw: &[String]) -> Result<Args<'_>> {
             Some("specify at most one of --room, --new-room, or --bg")
         }
         Run if has("name") && !has("new-room") => Some("--name requires --new-room"),
+        AgentSet if has("preset") || has("detected") => {
+            Some("--preset and --detected are only supported by agent add")
+        }
+        AgentAdd if has("detected") => (!args.pos.is_empty()
+            || !args.argv.is_empty()
+            || args.flags.len() != 1
+            || !args.multi_flags.is_empty())
+        .then_some("--detected does not accept an ID, command, or profile options"),
+        AgentAdd if has("preset") => (!args.pos.is_empty()
+            || !args.argv.is_empty()
+            || args.host.is_some()
+            || has("host-override")
+            || has("clear-host-override")
+            || !args.values("unset-env").is_empty())
+        .then_some("--preset does not accept a positional ID, command, host, or override options"),
+        AgentAdd if args.pos.is_empty() => Some("wrong number of arguments; see ddg --help"),
         AgentAdd if args.argv.is_empty() => Some("expected a command after --"),
         AgentDefault if has("clear") != args.pos.is_empty() => {
             Some("specify an agent ID or --clear, not both")
@@ -599,6 +626,66 @@ mod tests {
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             assert!(parse(&raw).is_err(), "{command}");
+        }
+    }
+
+    #[test]
+    fn agent_preset_modes_are_explicit_and_mutually_exclusive() {
+        for (command, action) in [
+            (
+                "a presets --no-detect -H remote --json",
+                Action::AgentPresets,
+            ),
+            (
+                "agent add --preset PI --label Pi --icon pi --cwd /tmp --env A=B --default",
+                Action::AgentAdd,
+            ),
+            ("agent add --detected -H remote --json", Action::AgentAdd),
+            ("agent add pi --unset-env A -- pi", Action::AgentAdd),
+            (
+                "agent set pi --host-override remote --unset-env A",
+                Action::AgentSet,
+            ),
+        ] {
+            let raw = command
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert_eq!(parse(&raw).unwrap().action, action, "{command}");
+        }
+        for command in [
+            "agent add",
+            "agent add pi",
+            "agent add -- pi",
+            "agent add --preset pi --detected",
+            "agent add pi --preset pi",
+            "agent add --preset pi -- pi",
+            "agent add --preset pi --host-override remote",
+            "agent add --preset pi --clear-host-override remote",
+            "agent add --preset pi --unset-env A",
+            "agent add --preset pi -H remote",
+            "agent set pi --preset pi",
+            "agent set pi --detected",
+            "agent add --detected pi",
+            "agent add --detected -- pi",
+            "agent add --detected --",
+            "agent add --detected --label Pi",
+            "agent add --detected --icon pi",
+            "agent add --detected --cwd /tmp",
+            "agent add --detected --env A=B",
+            "agent add --detected --unset-env A",
+            "agent add --detected --host-override remote",
+            "agent add --detected --clear-host-override remote",
+            "agent add --detected --default",
+            "agent add --detected --no-detect",
+            "agent presets --",
+            "agent presets -H all",
+        ] {
+            let raw = command
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert_eq!(parse(&raw).unwrap_err().code, "invalid_params", "{command}");
         }
     }
 

@@ -5,6 +5,7 @@ pub mod agent;
 pub mod client;
 pub mod dial;
 pub mod install;
+pub mod presets;
 pub mod profile;
 pub mod programs;
 pub mod remote_update;
@@ -13,7 +14,8 @@ pub(crate) const AGENT_ACTIVITY_V1: &str = "agent_activity_v1";
 
 pub use client::{
     CatalogChange, CatalogSubscription, ConnectionState, HostClient, HostEvent,
-    MessageStreamHandle, RelayStreamHandle, StreamError, TabStreamHandle,
+    MessageStreamHandle, PresetDetectError, PresetDetectOutcome, RelayStreamHandle, StreamError,
+    TabStreamHandle,
 };
 pub use dial::{
     DialError, DialErrorKind, DialPolicy, classify_ssh_stderr, dial, dial_and_handshake,

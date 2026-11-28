@@ -97,7 +97,7 @@ fn local_target_config_consent_and_container_policy() {
                 .unwrap()
                 .stdout
         )
-        .contains("[커스텀 소스]")
+        .contains("[Custom Source]")
     );
     update(path, &["config", "--clear-repo"], None);
     for sub in ["apply", "rollback"] {

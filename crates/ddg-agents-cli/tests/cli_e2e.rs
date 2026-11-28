@@ -7,7 +7,7 @@ use std::{
     io::{self, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::net::UnixStream,
+        unix::{fs::PermissionsExt, net::UnixStream},
     },
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
@@ -46,13 +46,21 @@ impl Sandbox {
 
     fn start() -> Self {
         let mut sandbox = Self::new();
-        let term = sibling("ddg-terminal-server");
-        let host = sibling("ddg-agents-host");
-        sandbox.core = Some(Process(sandbox.command(term).arg("core").spawn().unwrap()));
-        eventually(|| UnixStream::connect(sandbox.root.join("run/terminal.sock")).ok());
-        sandbox.host = Some(Process(sandbox.command(host).arg("serve").spawn().unwrap()));
-        eventually(|| UnixStream::connect(sandbox.root.join("run/host.sock")).ok());
+        sandbox.start_daemons(None);
         sandbox
+    }
+
+    fn start_daemons(&mut self, holder_path: Option<&Path>) {
+        let mut core = self.command(sibling("ddg-terminal-server"));
+        let mut host = self.command(sibling("ddg-agents-host"));
+        if let Some(path) = holder_path {
+            core.env("PATH", path);
+            host.env("PATH", &self.root);
+        }
+        self.core = Some(Process(core.arg("core").spawn().unwrap()));
+        eventually(|| UnixStream::connect(self.root.join("run/terminal.sock")).ok());
+        self.host = Some(Process(host.arg("serve").spawn().unwrap()));
+        eventually(|| UnixStream::connect(self.root.join("run/host.sock")).ok());
     }
 
     fn command(&self, bin: impl AsRef<Path>) -> Command {
@@ -328,6 +336,82 @@ fn skill_prints_and_installs_without_host_or_config() -> io::Result<()> {
     );
     assert!(!sb.root.join("config").exists());
     assert!(!sb.root.join("run").exists());
+    Ok(())
+}
+
+#[test]
+fn preset_workflow_uses_holder_path_without_running_candidates() -> io::Result<()> {
+    let mut sb = Sandbox::new();
+    let bins = sb.root.join("bin");
+    let executions = sb.root.join("preset-executions");
+    let agents = sb.root.join("config/agents.json");
+    fs::create_dir_all(&bins)?;
+    for name in ["pi", "codex"] {
+        let bin = bins.join(name);
+        fs::write(
+            &bin,
+            "#!/bin/sh\nprintf '%s\\n' \"${0##*/}\" >> \"$HOME/preset-executions\"\n",
+        )?;
+        fs::set_permissions(bin, fs::Permissions::from_mode(0o700))?;
+    }
+
+    let offline = sb.json(&["agent", "presets", "--no-detect"]);
+    assert_eq!(offline["detection_supported"], false);
+    let rows = offline["presets"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().all(|row| row["status"] == "unknown"));
+    assert!(!agents.exists());
+    assert!(!sb.root.join("run").exists());
+
+    sb.start_daemons(Some(&bins));
+    let detected = sb.json(&["agent", "presets", "--host", "local"]);
+    assert_eq!(detected["host_id"], "local");
+    assert_eq!(detected["detection_supported"], true);
+    let rows = detected["presets"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    for (row, (id, status)) in rows.iter().zip([
+        ("pi", "found"),
+        ("antigravity", "not_found"),
+        ("codex", "found"),
+        ("opencode", "not_found"),
+        ("claude-code", "not_found"),
+    ]) {
+        assert_eq!(row["id"], id);
+        assert_eq!(row["status"], status, "{id}");
+        assert_eq!(row["registered"], false);
+    }
+    assert!(!agents.exists());
+    assert_eq!(
+        sb.json(&["agent", "add", "--preset", "pi", "--label", "My Pi"])["id"],
+        "pi"
+    );
+    assert_eq!(
+        sb.json(&["agent", "add", "--detected"]),
+        json!({"host_id": "local", "added": ["codex"], "skipped": ["pi"], "unknown": []})
+    );
+    let saved = fs::read(&agents)?;
+    assert_eq!(sb.json(&["agent", "add", "--detected"])["added"], json!([]));
+    assert_eq!(fs::read(&agents)?, saved);
+    assert_eq!(
+        sb.json(&["agent", "ls"]),
+        json!({"default_agent_id": null, "agents": [
+            {"id": "pi", "label": "My Pi", "default": false},
+            {"id": "codex", "label": "Codex", "default": false}
+        ]})
+    );
+    assert_eq!(
+        sb.json(&["session", "ls", "--include-hidden"])["sessions"],
+        json!([])
+    );
+    assert!(!executions.exists());
+
+    let run = sb.json(&["run", "pi", "--bg"]);
+    let id = run["session_id"].as_str().unwrap();
+    let outcome = sb.json(&["session", "wait", id, "--timeout", "5"]);
+    assert_eq!(outcome["reason"], "exited");
+    assert_eq!(outcome["exit_code"], 0);
+    assert_eq!(fs::read_to_string(executions)?, "pi\n");
+    assert_eq!(fs::read(agents)?, saved);
     Ok(())
 }
 

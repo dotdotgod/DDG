@@ -115,6 +115,8 @@ async fn run(raw: &[String]) -> Result {
         Action::MsgSend | Action::MsgRecv | Action::MsgSubscribe => {
             return msg::run(&args, out).await;
         }
+        Action::AgentPresets => return agent::run_presets(&args, out).await,
+        Action::AgentAdd if args.has("detected") => return agent::run_presets(&args, out).await,
         Action::AgentLs
         | Action::AgentShow
         | Action::AgentAdd
@@ -142,8 +144,9 @@ async fn run(raw: &[String]) -> Result {
         | SessionRestart | SessionClose | SessionAttach => session::run(args, &config, out).await,
         SessionWait => wait::run(&args, &config, out).await,
         Help | Version | Skill | SkillInstall | MsgSend | MsgRecv | MsgSubscribe | Run
-        | AgentLs | AgentShow | AgentAdd | AgentSet | AgentDefault | AgentRm | UpdateStatus
-        | UpdateCheck | UpdateApply | UpdateRollback | UpdateConfig | UpdateApplyHelper => {
+        | AgentLs | AgentShow | AgentPresets | AgentAdd | AgentSet | AgentDefault | AgentRm
+        | UpdateStatus | UpdateCheck | UpdateApply | UpdateRollback | UpdateConfig
+        | UpdateApplyHelper => {
             unreachable!()
         }
     }

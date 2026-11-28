@@ -201,9 +201,9 @@ fn source_json(repo: &RepoSlug, origin: SourceOrigin) -> Value {
 fn source_text(repo: &RepoSlug, origin: SourceOrigin) -> String {
     match origin {
         SourceOrigin::Default => String::new(),
-        SourceOrigin::Config => format!("[커스텀 소스] {} (config)\n", diagnostic(repo.as_str())),
+        SourceOrigin::Config => format!("[Custom Source] {} (config)\n", diagnostic(repo.as_str())),
         SourceOrigin::Env => format!(
-            "[커스텀 소스] {} (DDG_UPDATE_REPO)\n",
+            "[Custom Source] {} (DDG_UPDATE_REPO)\n",
             diagnostic(repo.as_str())
         ),
     }
