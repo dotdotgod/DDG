@@ -174,6 +174,57 @@ pub struct PtyListResult {
     pub ptys: Vec<PtyInfo>,
 }
 
+/// Probe only the fixed built-in basenames; the request must be an empty object.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PtyProbeBinsParams {}
+
+impl<'de> Deserialize<'de> for PtyProbeBinsParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EmptyObject;
+
+        impl<'de> serde::de::Visitor<'de> for EmptyObject {
+            type Value = PtyProbeBinsParams;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an empty object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                if let Some(key) = map.next_key::<String>()? {
+                    return Err(serde::de::Error::unknown_field(&key, &[]));
+                }
+                Ok(PtyProbeBinsParams {})
+            }
+        }
+
+        // Serde's derived struct deserializer would also accept an empty array.
+        deserializer.deserialize_map(EmptyObject)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BinProbeStatus {
+    Found,
+    NotFound,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BinProbeItem {
+    pub bin: String,
+    pub status: BinProbeStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PtyProbeBinsResult {
+    pub items: Vec<BinProbeItem>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PtySubscribeParams {}
 

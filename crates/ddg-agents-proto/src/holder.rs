@@ -2,12 +2,17 @@
 //! `[kind: u8][pty_id: u32 LE][len: u32 LE][payload: len bytes]`
 
 use crate::frame::MAX_PAYLOAD;
+pub use crate::terminal::{
+    BinProbeItem as HolderBinStatus, BinProbeStatus, PtyProbeBinsParams as HolderProbeBins,
+    PtyProbeBinsResult as HolderProbeBinsResult,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 pub const HOLDER_PROTO_VERSION: u32 = 1;
 pub const HOLDER_HEADER_LEN: usize = 9;
+pub const FEATURE_PROBE_BINS_V1: &str = "probe_bins_v1";
 
 // Core → Holder
 pub const HELLO: u8 = 1;
@@ -19,6 +24,8 @@ pub const RELEASE: u8 = 6;
 pub const GOODBYE: u8 = 7;
 /// Query the live foreground process group, or all live PTYs when pty_id is 0.
 pub const QUERY_FG_PGRP: u8 = 8;
+/// Probe only the built-in basenames; the header's `pty_id` carries the request ID.
+pub const QUERY_BINS: u8 = 9;
 
 // Holder → Core
 pub const WELCOME: u8 = 101;
@@ -29,6 +36,8 @@ pub const SPAWN_FAILED: u8 = 105;
 pub const EXITED: u8 = 106;
 pub const BYE: u8 = 107;
 pub const FG_PGRP: u8 = 108;
+/// Reply to QUERY_BINS; echoes its request ID in the header's `pty_id`.
+pub const BINS_RESULT: u8 = 109;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HolderHello {
@@ -174,13 +183,52 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // UT-PROTO-01
+    #[test]
+    fn preset_probe_round_trips_with_request_id() {
+        assert_eq!(
+            crate::BUILTIN_AGENT_PRESET_BINS,
+            ["pi", "agy", "codex", "opencode", "claude"]
+        );
+        let request_id = 0x0102_0304;
+        let frame = encode_json(QUERY_BINS, request_id, &HolderProbeBins {});
+        let (kind, id, payload) = read_frame(&mut frame.as_slice()).unwrap().unwrap();
+        assert_eq!((kind, id), (9, request_id));
+        assert_eq!(payload, b"{}");
+        assert_eq!(
+            parse_json::<HolderProbeBins>(&payload).unwrap(),
+            HolderProbeBins {}
+        );
+        assert!(parse_json::<HolderProbeBins>(br#"{"bins":["sh"]}"#).is_err());
+        assert!(parse_json::<HolderProbeBins>(b"[]").is_err());
+
+        let reply = HolderProbeBinsResult {
+            items: vec![HolderBinStatus {
+                bin: "pi".into(),
+                status: BinProbeStatus::Found,
+            }],
+        };
+        let frame = encode_json(BINS_RESULT, id, &reply);
+        let (kind, id, payload) = read_frame(&mut frame.as_slice()).unwrap().unwrap();
+        assert_eq!((kind, id), (109, request_id));
+        assert_eq!(
+            parse_json::<HolderProbeBinsResult>(&payload).unwrap(),
+            reply
+        );
+        assert_eq!(
+            parse_json::<serde_json::Value>(&payload).unwrap(),
+            json!({"items": [{"bin": "pi", "status": "found"}]})
+        );
+    }
+
     #[test]
     fn holder_v1_welcome_negotiates_optional_features() {
         let mut wire = json!({"version": 1, "instance": "holder", "pid": 2, "ptys": []});
         let welcome: HolderWelcome = serde_json::from_value(wire.clone()).unwrap();
         assert!(welcome.features.is_empty());
         assert_eq!(json!(welcome), wire);
-        wire["features"] = json!(["fg_pgrp_v1"]);
+        wire["features"] = json!(["fg_pgrp_v1", FEATURE_PROBE_BINS_V1]);
+        assert_eq!(wire["features"][1], "probe_bins_v1");
         let welcome: HolderWelcome = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(json!(welcome), wire);
     }

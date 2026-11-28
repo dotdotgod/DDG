@@ -16,6 +16,7 @@ fn interpreter(comm: &str) -> bool {
         "node"
             | "nodejs"
             | "bun"
+            | "bunx"
             | "deno"
             | "python"
             | "python3"
@@ -28,7 +29,17 @@ fn interpreter(comm: &str) -> bool {
             | "dash"
             | "npx"
             | "tsx"
+            | "pnpm"
+            | "yarn"
             | "uv"
+            | "uvx"
+            | "bundle"
+            | "env"
+            | "sudo"
+            | "nice"
+            | "time"
+            | "watch"
+            | "nodemon"
     )
 }
 
@@ -37,21 +48,62 @@ fn classify_argv<'a>(comm: &str, argv: impl IntoIterator<Item = &'a [u8]>) -> Op
     if !interpreter(comm) {
         return None;
     }
-    let arg = std::str::from_utf8(argv.into_iter().nth(1)?).ok()?;
-    // No options are allowlisted: eval flags and any unknown flag stop classification.
-    if arg.starts_with('-')
-        || arg.contains(['=', '@'])
+    let mut argv = argv.into_iter();
+    let first = std::str::from_utf8(argv.next()?).ok()?;
+    let name = safe_arg_basename(first)?;
+    if first.starts_with('-') && first != name {
+        return None;
+    }
+    let (base, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+    let name = if ext.eq_ignore_ascii_case("exe") {
+        base
+    } else {
+        name
+    };
+    let same_runtime = name.eq_ignore_ascii_case(comm)
+        || (comm == "node" && name.eq_ignore_ascii_case("nodejs"))
+        || (comm == "nodejs" && name.eq_ignore_ascii_case("node"));
+    if first.starts_with('-') || name.starts_with('-') {
+        // Only the matching shell's login argv[0] is not an option.
+        if !matches!(comm, "sh" | "bash" | "zsh" | "fish" | "dash")
+            || !name
+                .strip_prefix('-')
+                .is_some_and(|s| s.eq_ignore_ascii_case(comm))
+        {
+            return None;
+        }
+    } else if !same_runtime {
+        return script_basename(name);
+    }
+    let arg = std::str::from_utf8(argv.next()?).ok()?;
+    if arg.starts_with('-') {
+        return None;
+    }
+    script_basename(safe_arg_basename(arg)?)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn safe_arg_basename(arg: &str) -> Option<&str> {
+    // Check the entire token, not just what survives path stripping.
+    if arg.contains(['=', '@'])
         || arg.contains("://")
         || arg.chars().any(|c| c.is_whitespace() || c.is_control())
     {
         return None;
     }
-    display_basename(arg)
+    arg.rsplit(['/', '\\']).next()
 }
 
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-fn display_basename(name: &str) -> Option<String> {
-    let basename = std::path::Path::new(name).file_name()?.to_str()?;
+fn script_basename(name: &str) -> Option<String> {
+    let text = sanitize_display_text(name, 64);
+    (!matches!(text.as_str(), "" | "." | "..") && !text.starts_with('-')).then_some(text)
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+fn normalize_comm(name: &str) -> Option<String> {
+    let basename = name.rsplit(['/', '\\']).next()?;
+    let basename = basename.strip_prefix('-').unwrap_or(basename);
     let text = sanitize_display_text(basename, 64);
     (!text.is_empty()).then_some(text)
 }
@@ -143,16 +195,16 @@ pub fn inspect_foreground(pgid: u32, pty_pid: u32) -> Option<ForegroundHint> {
         return None;
     }
     let bytes = read(c"comm", 256)?;
-    let name = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
-    let script_hint = if interpreter(name) {
+    let comm = normalize_comm(std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?)?;
+    let script_hint = if interpreter(&comm) {
         read(c"cmdline", MAX_CMDLINE_BYTES)
-            .and_then(|bytes| classify_argv(name, parse_cmdline(&bytes)))
+            .and_then(|bytes| classify_argv(&comm, parse_cmdline(&bytes)))
     } else {
         None
     };
     Some(ForegroundHint {
         pid: pgid,
-        comm: display_basename(name)?,
+        comm,
         script_hint,
     })
 }
@@ -190,15 +242,15 @@ pub fn inspect_foreground(pgid: u32, _pty_pid: u32) -> Option<ForegroundHint> {
         .ok()?
         .to_str()
         .ok()?;
-    let name = std::path::Path::new(path).file_name()?.to_str()?;
-    let script_hint = if interpreter(name) {
-        macos_script_hint(pid, name)
+    let comm = normalize_comm(path)?;
+    let script_hint = if interpreter(&comm) {
+        macos_script_hint(pid, &comm)
     } else {
         None
     };
     Some(ForegroundHint {
         pid: pgid,
-        comm: display_basename(name)?,
+        comm,
         script_hint,
     })
 }
@@ -304,6 +356,47 @@ mod tests {
             classify_argv("python3", parse_cmdline(&data)),
             Some("x".repeat(64))
         );
+    }
+
+    #[test]
+    fn classifies_bounded_argv0_and_normalizes_login_shells() {
+        for name in ["pi", "/usr/local/bin/pi", r"C:\bin\pi.EXE"] {
+            assert_eq!(
+                classify_argv("node", [name.as_bytes(), b"", b""]),
+                Some("pi".into())
+            );
+        }
+        assert_eq!(normalize_comm("-zsh"), Some("zsh".into()));
+        assert_eq!(
+            classify_argv("zsh", [b"-flag/-zsh".as_slice(), b"app.sh"]),
+            None
+        );
+        assert_eq!(
+            classify_argv("zsh", [b"-zsh".as_slice(), b"/work/init.sh"]),
+            Some("init.sh".into())
+        );
+        assert_eq!(
+            classify_argv("node", [b"NodeJS.EXE".as_slice(), b"app.js"]),
+            Some("app.js".into())
+        );
+        for token in [
+            "-bad",
+            "/bin/-bad",
+            "--eval=/bin/pi",
+            "/SECRET=1/bin/pi",
+            "/user@host/bin/pi",
+            "https://host/bin/pi",
+            "/two words/bin/pi",
+            "/bad\x1b/bin/pi",
+            "-/bin/pi",
+            "/bin/\u{202e}-bad",
+        ] {
+            assert_eq!(classify_argv("node", [token.as_bytes(), b"app.js"]), None);
+            assert_eq!(
+                classify_argv("node", [b"node".as_slice(), token.as_bytes()]),
+                None
+            );
+        }
     }
 
     #[test]

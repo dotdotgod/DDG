@@ -10,3 +10,6 @@ pub mod openrpc;
 pub mod plugin;
 pub mod rpc;
 pub mod terminal;
+
+/// The only executable basenames permitted in preset detection.
+pub const BUILTIN_AGENT_PRESET_BINS: [&str; 5] = ["pi", "agy", "codex", "opencode", "claude"];

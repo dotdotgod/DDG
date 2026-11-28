@@ -1975,6 +1975,68 @@
       "summary": "Fetch the room/tab catalog and tab activity snapshot and subscribe to changes."
     },
     {
+      "name": "host.agent_presets_detect",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Detection accepts no client-supplied commands, paths, or basenames.",
+            "title": "HostAgentPresetsDetectParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "AgentPresetDetection": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/$defs/BinProbeStatus"
+                }
+              },
+              "required": [
+                "id",
+                "status"
+              ],
+              "type": "object"
+            },
+            "BinProbeStatus": {
+              "enum": [
+                "found",
+                "not_found",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/AgentPresetDetection"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "title": "HostAgentPresetsDetectResult",
+          "type": "object"
+        }
+      },
+      "summary": "Check availability of the fixed built-in agent presets as the operator."
+    },
+    {
       "name": "host.room_create",
       "paramStructure": "by-name",
       "params": [

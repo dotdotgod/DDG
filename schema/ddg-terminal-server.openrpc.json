@@ -1417,6 +1417,68 @@
       "summary": "List live PTYs."
     },
     {
+      "name": "pty.probe_bins",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "description": "Probe only the fixed built-in basenames; the request must be an empty object.",
+            "title": "PtyProbeBinsParams",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$defs": {
+            "BinProbeItem": {
+              "properties": {
+                "bin": {
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/$defs/BinProbeStatus"
+                }
+              },
+              "required": [
+                "bin",
+                "status"
+              ],
+              "type": "object"
+            },
+            "BinProbeStatus": {
+              "enum": [
+                "found",
+                "not_found",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/BinProbeItem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "title": "PtyProbeBinsResult",
+          "type": "object"
+        }
+      },
+      "summary": "Check the fixed built-in executable basenames in the Holder environment without executing them."
+    },
+    {
       "name": "pty.subscribe",
       "paramStructure": "by-name",
       "params": [

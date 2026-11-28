@@ -8,9 +8,9 @@ use ddg_agents_proto::frame::{CONTROL_CHANNEL, Frame, FrameKind, read_frame, wri
 use ddg_agents_proto::rpc::{Request, Response};
 use ddg_agents_proto::terminal::{
     ControlMode, HelloParams, HelloResult, PROTOCOL_VERSION, PtyAttachParams, PtyAttachResult,
-    PtyClaimControlParams, PtyClaimControlResult, PtyKillParams, PtyListResult, PtySpawnParams,
-    PtySpawnResult, SessionInboxSubscribeResult, SessionMessage, SessionReadScreenResult,
-    SessionRecvResult, SessionSendResult, SessionWriteInputResult,
+    PtyClaimControlParams, PtyClaimControlResult, PtyKillParams, PtyKillResult, PtyListResult,
+    PtySpawnParams, PtySpawnResult, SessionInboxSubscribeResult, SessionMessage,
+    SessionReadScreenResult, SessionRecvResult, SessionSendResult, SessionWriteInputResult,
 };
 use ddg_agents_vt::Vt;
 use serde::de::DeserializeOwned;
@@ -169,6 +169,61 @@ impl Drop for Sandbox {
             let _ = child.wait();
         }
         let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn ut_term_03_probes_holder_path_without_running_candidates() {
+    use ddg_agents_proto::terminal::{BinProbeStatus::*, PtyProbeBinsResult};
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let mut sb = Sandbox::new("probe");
+    let bin = sb.root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let marker = sb.root.join("executed");
+    let pi = bin.join("pi");
+    std::fs::write(&pi, format!("#!/bin/sh\n: > '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+    symlink(&pi, bin.join("codex")).unwrap();
+
+    // The Holder and Core deliberately see different PATHs.
+    sb.children.push(
+        sb.cmd(&["holder", "--socket"])
+            .arg(sb.run.join("holder.sock"))
+            .args(["--bin-path", Sandbox::bin()])
+            .env("PATH", &bin)
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while UnixStream::connect(sb.run.join("holder.sock")).is_err() {
+        assert!(Instant::now() < deadline, "holder socket did not appear");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    sb.children
+        .push(sb.cmd(&["core"]).env("PATH", "").spawn().unwrap());
+    sb.wait_for_terminal_sock(Duration::from_secs(5));
+
+    let mut client = sb.connect_stdio();
+    let result: PtyProbeBinsResult = client.call("pty.probe_bins", json!({})).unwrap();
+    assert_eq!(
+        result
+            .items
+            .iter()
+            .map(|item| (item.bin.as_str(), item.status))
+            .collect::<Vec<_>>(),
+        [
+            ("pi", Found),
+            ("agy", NotFound),
+            ("codex", Found),
+            ("opencode", NotFound),
+            ("claude", NotFound)
+        ]
+    );
+    assert!(!marker.exists());
+    for invalid in [json!({"bins": ["sh"]}), json!([]), Value::Null] {
+        let error = client.call_raw("pty.probe_bins", invalid).unwrap_err();
+        assert_eq!(error["code"], -32602);
     }
 }
 
@@ -402,6 +457,185 @@ fn spawn_detach_reattach_same_pid_and_explicit_kill() {
     assert!(list_after.ptys.is_empty());
 }
 
+const KILL_TEST_SESSION: &str = "ses_00000000000000000000000001";
+const KILL_TEST_SIBLING: &str = "ses_00000000000000000000000002";
+
+fn spawn_kill_test_pty(
+    client: &mut StdioClient,
+    sb: &Sandbox,
+    session_id: &str,
+    argv: &[&str],
+    env: Value,
+) -> PtySpawnResult {
+    client
+        .call(
+            "pty.spawn",
+            json!({
+                "session_id": session_id, "run_generation": 1, "cols": 80, "rows": 24,
+                "cwd": sb.root, "argv": argv, "env": env,
+            }),
+        )
+        .unwrap()
+}
+
+fn wait_for_kill_test_screen(client: &mut StdioClient, session_id: &str, marker: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let screen: SessionReadScreenResult = client
+            .call(
+                "session.read_screen",
+                json!({"session_id": session_id, "lines": 24, "max_bytes": 4096}),
+            )
+            .unwrap();
+        if !screen.text.trim().is_empty() && screen.text.contains(marker) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {marker:?}; screen was {:?}",
+            screen.text
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn write_kill_test_input(client: &mut StdioClient, session_id: &str, input: &[u8]) {
+    let result: SessionWriteInputResult = client
+        .call(
+            "session.write_input",
+            json!({
+                "session_id": session_id,
+                "from_session_id": session_id,
+                "from_host_id": "test",
+                "is_remote": false,
+                "data_b64": ddg_agents_proto::id::encode_base64(input),
+            }),
+        )
+        .unwrap();
+    assert_eq!(result.byte_len as usize, input.len());
+}
+
+fn kill_test_pty(client: &mut StdioClient, pty_id: u32) -> PtyKillResult {
+    client
+        .call("pty.kill", json!(PtyKillParams { pty_id }))
+        .unwrap()
+}
+
+fn assert_kill_test_list_empty(client: &mut StdioClient) {
+    let list: PtyListResult = client.call("pty.list", json!({})).unwrap();
+    assert!(list.ptys.is_empty(), "remaining PTYs: {:?}", list.ptys);
+}
+
+fn assert_interactive_shell_closes_cooperatively(argv: &[&str], check_sibling: bool) {
+    if !std::path::Path::new(argv[0]).try_exists().unwrap() {
+        eprintln!("skipping: {} does not exist", argv[0]);
+        return;
+    }
+    let sb = Sandbox::new("shell-kill");
+    let mut client = sb.connect_stdio();
+    let shell = spawn_kill_test_pty(
+        &mut client,
+        &sb,
+        KILL_TEST_SESSION,
+        argv,
+        json!({"HOME": sb.root, "ZDOTDIR": sb.root, "HISTFILE": "/dev/null", "PROMPT_COMMAND": ""}),
+    );
+    let sibling = check_sibling.then(|| {
+        let sibling = spawn_kill_test_pty(
+            &mut client,
+            &sb,
+            KILL_TEST_SIBLING,
+            &[
+                "/bin/sh",
+                "-c",
+                r#"printf 'SIBLING_READY\n'; while IFS= read -r line; do printf 'SIBLING_REPLY:%s\n' "$line"; done"#,
+            ],
+            Value::Null,
+        );
+        wait_for_kill_test_screen(&mut client, KILL_TEST_SIBLING, "SIBLING_READY");
+        sibling
+    });
+    // Let the shell initialize the tty before writing input. Only the new prompt
+    // contains the contiguous marker, not the echo of the command that sets it.
+    wait_for_kill_test_screen(&mut client, KILL_TEST_SESSION, "");
+    write_kill_test_input(
+        &mut client,
+        KILL_TEST_SESSION,
+        b"PS1='DDG_KILL_'\"PROMPT> \"\n",
+    );
+    wait_for_kill_test_screen(&mut client, KILL_TEST_SESSION, "DDG_KILL_PROMPT>");
+    let result = kill_test_pty(&mut client, shell.pty_id);
+    assert_ne!(result.signal, Some(libc::SIGKILL), "{result:?}");
+
+    if let Some(sibling) = sibling {
+        let list: PtyListResult = client.call("pty.list", json!({})).unwrap();
+        assert_eq!(list.ptys.len(), 1);
+        assert_eq!(list.ptys[0].pty_id, sibling.pty_id);
+        assert_eq!(list.ptys[0].pid, sibling.pid);
+        write_kill_test_input(&mut client, KILL_TEST_SIBLING, b"ping\n");
+        wait_for_kill_test_screen(&mut client, KILL_TEST_SIBLING, "SIBLING_REPLY:ping");
+        kill_test_pty(&mut client, sibling.pty_id);
+    }
+    assert_kill_test_list_empty(&mut client);
+}
+
+#[test]
+fn pty_kill_closes_interactive_zsh_without_sigkill_or_affecting_sibling() {
+    assert_interactive_shell_closes_cooperatively(&["/bin/zsh", "-dfi"], true);
+}
+
+#[test]
+fn pty_kill_closes_interactive_bash_without_sigkill() {
+    assert_interactive_shell_closes_cooperatively(
+        &["/bin/bash", "--norc", "--noprofile", "-i"],
+        false,
+    );
+}
+
+#[test]
+fn pty_kill_allows_term_cleanup_when_hup_is_ignored() {
+    let sb = Sandbox::new("term-cleanup");
+    let mut client = sb.connect_stdio();
+    let marker = sb.root.join("cleaned");
+    let child = spawn_kill_test_pty(
+        &mut client,
+        &sb,
+        KILL_TEST_SESSION,
+        &[
+            "/bin/sh",
+            "-c",
+            r#"trap '' HUP; trap 'printf CLEANED > "$MARKER"; exit 0' TERM; printf READY; while :; do sleep 0.05; done"#,
+        ],
+        json!({"MARKER": marker}),
+    );
+    wait_for_kill_test_screen(&mut client, KILL_TEST_SESSION, "READY");
+    let result = kill_test_pty(&mut client, child.pty_id);
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "CLEANED");
+    assert_eq!(result.exit_code, Some(0));
+    assert_ne!(result.signal, Some(libc::SIGKILL));
+}
+
+#[test]
+fn pty_kill_reaps_stubborn_child_with_sigkill() {
+    let sb = Sandbox::new("kill-stubborn");
+    let mut client = sb.connect_stdio();
+    let child = spawn_kill_test_pty(
+        &mut client,
+        &sb,
+        KILL_TEST_SESSION,
+        &[
+            "/bin/sh",
+            "-c",
+            "trap '' HUP TERM; printf READY; while :; do sleep 0.05; done",
+        ],
+        Value::Null,
+    );
+    wait_for_kill_test_screen(&mut client, KILL_TEST_SESSION, "READY");
+    let result = kill_test_pty(&mut client, child.pty_id);
+    assert_eq!(result.signal, Some(libc::SIGKILL));
+    assert_kill_test_list_empty(&mut client);
+}
+
 #[test]
 fn single_controller_rejects_readonly_and_stale_epoch_after_takeover() {
     let sb = Sandbox::new("control");
@@ -501,9 +735,9 @@ fn single_controller_rejects_readonly_and_stale_epoch_after_takeover() {
 }
 
 #[test]
-fn core_sigkill_recovery_preserves_same_pid_and_screen_via_holder() {
+fn core_detach_and_sigkill_recovery_preserve_same_pid_and_screen_via_holder() {
     let mut sb = Sandbox::new("crash");
-    let core_pid = sb.spawn_core();
+    sb.spawn_core();
 
     let mut c1 = sb.connect_stdio();
     let spawned: PtySpawnResult = c1
@@ -542,11 +776,30 @@ fn core_sigkill_recovery_preserves_same_pid_and_screen_via_holder() {
     );
     drop(c1);
 
-    // Hard-kill Core with SIGKILL! Holder must keep PTY alive and respawn Core.
-    unsafe {
-        libc::kill(core_pid as libc::pid_t, libc::SIGKILL);
-    }
-    let _ = sb.children[0].wait();
+    let mut admin = UnixStream::connect(sb.run.join("terminal-admin.sock")).unwrap();
+    admin
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    admin.write_all(b"detach\n").unwrap();
+    let mut reply = String::new();
+    BufReader::new(admin).read_line(&mut reply).unwrap();
+    assert_eq!(reply, "{\"ok\":true}\n");
+    assert!(sb.children[0].wait().unwrap().success());
+    // Intentional detach has a longer grace than a crash (100ms in this sandbox).
+    std::thread::sleep(Duration::from_millis(350));
+    assert!(UnixStream::connect(sb.run.join("terminal.sock")).is_err());
+    let core_pid = sb.spawn_core();
+    let mut client = sb.connect_stdio();
+    let list: PtyListResult = client.call("pty.list", json!({})).unwrap();
+    assert_eq!(list.ptys[0].pid, spawned.pid);
+    drop(client);
+
+    // Hard-kill the replacement Core; Holder must now restart it without a new client.
+    assert_eq!(
+        unsafe { libc::kill(core_pid as libc::pid_t, libc::SIGKILL) },
+        0
+    );
+    let _ = sb.children[1].wait();
 
     // Wait for Holder's supervisor to respawn a fresh Core on terminal.sock.
     let deadline = Instant::now() + Duration::from_secs(5);

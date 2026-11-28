@@ -9,7 +9,9 @@ use ddg_agents_proto::frame::{
     CONTROL_CHANNEL, Frame, FrameKind, HEADER_LEN, decode_header, encode_frame,
 };
 use ddg_agents_proto::rpc::{ErrorKind, Request, Response, RpcError};
-use ddg_agents_proto::terminal::{HelloParams, HelloResult, PROTOCOL_VERSION};
+use ddg_agents_proto::terminal::{
+    HelloParams, HelloResult, PROTOCOL_VERSION, PtyProbeBinsParams, PtyProbeBinsResult,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -20,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::time::Instant;
 
 async fn ensure_terminal_server(paths: &Paths) -> io::Result<()> {
@@ -88,11 +90,26 @@ pub type StreamSink = mpsc::UnboundedSender<Frame>;
 
 type PendingEntry = (oneshot::Sender<Response>, Option<StreamSink>);
 
+struct PendingCall<'a> {
+    pending: &'a Mutex<HashMap<u64, PendingEntry>>,
+    id: u64,
+}
+
+impl Drop for PendingCall<'_> {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.id);
+    }
+}
+
 pub struct TermConn {
     pub hello: HelloResult,
     tx: mpsc::UnboundedSender<Vec<u8>>,
     pending: Arc<Mutex<HashMap<u64, PendingEntry>>>,
     next_id: AtomicU64,
+    probe_in_flight: Semaphore,
     alive: Arc<AtomicBool>,
     streams: Arc<Mutex<HashMap<u32, StreamSink>>>,
     writer: tokio::task::AbortHandle,
@@ -219,6 +236,7 @@ impl TermConn {
             tx,
             pending,
             next_id: AtomicU64::new(2),
+            probe_in_flight: Semaphore::new(1),
             alive,
             streams,
             writer,
@@ -228,6 +246,10 @@ impl TermConn {
     pub fn close(&self) {
         self.alive.store(false, Ordering::Release);
         self.writer.abort();
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
     }
 
     pub fn detach_stream(&self, channel: u32) {
@@ -246,6 +268,14 @@ impl TermConn {
         self.tx
             .send(encoded)
             .map_err(|_| "terminal server connection closed".into())
+    }
+
+    pub async fn probe_bins(&self) -> Option<PtyProbeBinsResult> {
+        // Concurrent detections must not queue behind an unresponsive Core.
+        let _permit = self.probe_in_flight.try_acquire().ok()?;
+        self.call("pty.probe_bins", json!(PtyProbeBinsParams {}))
+            .await
+            .ok()
     }
 
     pub async fn call<T: DeserializeOwned>(
@@ -295,33 +325,29 @@ impl TermConn {
             }
             pending.insert(id, (tx, sink));
         }
+        let _pending = PendingCall {
+            pending: &self.pending,
+            id,
+        };
         if self
             .send_frame(CONTROL_CHANNEL, FrameKind::Data, &bytes)
             .is_err()
         {
-            self.pending
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&id);
             return Err(RpcError::new(
                 ErrorKind::Unavailable,
                 "ddg-terminal-server connection closed",
                 None,
             ));
         }
-        let timeout = if method == "session.recv" {
-            Duration::from_millis(req.params["wait_ms"].as_u64().unwrap_or(0))
-                .saturating_add(Duration::from_secs(15))
-        } else {
-            Duration::from_secs(15)
+        let timeout = match method {
+            "pty.probe_bins" => Duration::from_secs(3),
+            "session.recv" => Duration::from_millis(req.params["wait_ms"].as_u64().unwrap_or(0))
+                .saturating_add(Duration::from_secs(15)),
+            _ => Duration::from_secs(15),
         };
         let resp = tokio::time::timeout(timeout, rx)
             .await
             .map_err(|_| {
-                self.pending
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&id);
                 RpcError::new(
                     ErrorKind::Unavailable,
                     format!("ddg-terminal-server timed out on {method}"),
@@ -340,4 +366,50 @@ impl TermConn {
             None => Ok(resp.result.unwrap_or(Value::Null)),
         }
     }
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn ut_host_01_probe_timeout_cancellation_and_single_pending_call() {
+    use crate::host_service::tests::{Fixture, fixture_catalog};
+    use ddg_agents_proto::host::PresetDetectStatus;
+    use std::task::{Context, Waker};
+
+    let mut f = Fixture::new(fixture_catalog()).await;
+    let host = f.host.clone();
+    let term = host.term().unwrap();
+    let pending_len = || term.pending.lock().unwrap().len();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut cancelled = Box::pin(term.probe_bins());
+    assert!(cancelled.as_mut().poll(&mut cx).is_pending());
+    let stale = f.expect("pty.probe_bins").await;
+    assert_eq!(pending_len(), 1);
+    assert!(term.probe_bins().await.is_none());
+    assert_eq!(pending_len(), 1);
+    drop(cancelled);
+    assert_eq!(pending_len(), 0);
+
+    let started = Instant::now();
+    let (timed_out, _) = tokio::join!(host.detect_agent_presets(), async {
+        let current = f.expect("pty.probe_bins").await;
+        assert_ne!(stale.id, current.id);
+        f.reply(stale, json!({"items": [{"bin": "pi", "status": "found"}]}))
+            .await;
+    });
+    assert!(started.elapsed() >= Duration::from_secs(3));
+    assert_eq!(pending_len(), 0);
+    assert_eq!(timed_out.items.len(), 5);
+    assert!(
+        timed_out
+            .items
+            .iter()
+            .all(|item| item.status == PresetDetectStatus::Unknown)
+    );
+
+    let (released, _) = tokio::join!(term.probe_bins(), async {
+        let req = f.expect("pty.probe_bins").await;
+        f.reply(req, json!({"items": []})).await;
+    });
+    assert!(released.is_some());
+    assert_eq!(pending_len(), 0);
 }

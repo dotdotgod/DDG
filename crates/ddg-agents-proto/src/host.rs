@@ -3,11 +3,13 @@
 use crate::id::{parse_session_id, parse_standard_room_id, validate_background_room_id};
 use crate::rpc::RpcError;
 use crate::terminal::{self, AgentStatus, ControlMode, ForegroundHint};
+pub use crate::terminal::BinProbeStatus as PresetDetectStatus;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
+pub const FEATURE_AGENT_PRESETS_V1: &str = "agent_presets_v1";
 pub const CATALOG_SCHEMA_VERSION: u32 = 2;
 pub const MAX_TABS_PER_ROOM: usize = 16;
 pub const MAX_BACKGROUND_TABS: usize = 64;
@@ -482,6 +484,28 @@ pub struct HostHelloResult {
     pub active_pty_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback_version: Option<String>,
+}
+
+/// Detection accepts no client-supplied commands, paths, or basenames.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostAgentPresetsDetectParams {}
+
+impl<'de> Deserialize<'de> for HostAgentPresetsDetectParams {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        terminal::PtyProbeBinsParams::deserialize(deserializer).map(|_| Self {})
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentPresetDetection {
+    pub id: String,
+    pub status: PresetDetectStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostAgentPresetsDetectResult {
+    pub items: Vec<AgentPresetDetection>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1016,6 +1040,53 @@ pub enum HostEvent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // UT-PROTO-01
+    #[test]
+    fn preset_detection_wire_is_strict_and_keeps_optional_hello_feature() {
+        fn check_empty<T: serde::de::DeserializeOwned + Serialize>() {
+            assert_eq!(
+                json!(serde_json::from_value::<T>(json!({})).unwrap()),
+                json!({})
+            );
+            for invalid in [
+                json!({"bins": ["sh"]}),
+                json!({"path": "/bin/sh"}),
+                json!({"command": "sh"}),
+                json!({"other": null}),
+                json!([]),
+                Value::Null,
+            ] {
+                assert!(
+                    serde_json::from_value::<T>(invalid.clone()).is_err(),
+                    "{invalid}"
+                );
+            }
+        }
+        check_empty::<HostAgentPresetsDetectParams>();
+        check_empty::<terminal::PtyProbeBinsParams>();
+
+        for (status, wire) in [
+            (PresetDetectStatus::Found, "found"),
+            (PresetDetectStatus::NotFound, "not_found"),
+            (PresetDetectStatus::Unknown, "unknown"),
+        ] {
+            assert_eq!(json!(status), wire);
+            let reply = json!({"items": [{"id": "pi", "status": wire}]});
+            let decoded: HostAgentPresetsDetectResult = serde_json::from_value(reply.clone()).unwrap();
+            assert_eq!(decoded.items[0].status, status);
+            assert_eq!(json!(decoded), reply);
+        }
+        let mut hello = json!({
+            "protocol_version": 1, "host_id": "test", "boot_generation": 1, "conn_id": 1
+        });
+        let legacy: HostHelloResult = serde_json::from_value(hello.clone()).unwrap();
+        assert!(legacy.features.is_empty());
+        hello["features"] = json!([FEATURE_AGENT_PRESETS_V1]);
+        let modern: HostHelloResult = serde_json::from_value(hello.clone()).unwrap();
+        assert_eq!(modern.features, ["agent_presets_v1"]);
+        assert_eq!(json!(modern), hello);
+    }
 
     #[test]
     fn session_write_accepts_missing_or_explicit_generation() {

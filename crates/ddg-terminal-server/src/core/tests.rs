@@ -2,7 +2,10 @@ use super::*;
 use ddg_agents_proto::frame::{FrameKind, INITIAL_CREDIT, decode_header};
 use ddg_agents_proto::id::encode_base64;
 use ddg_agents_proto::terminal::{ControlLease, SessionMessage, SessionMessagePayload};
+use std::future::{Future, poll_fn};
+use std::pin::Pin;
 use std::sync::mpsc::Receiver;
+use std::task::Poll;
 
 const SESSION: &str = "ses_00000000000000000000000001";
 
@@ -375,4 +378,147 @@ async fn mailbox_waits_and_purges_on_generation_bump_exit_and_kill() {
         core.handle_exited(pty_id, exit);
     });
     result.unwrap();
+}
+
+fn kill_with_test_timeouts(
+    core: &Core,
+    pty_id: u32,
+) -> impl Future<Output = Result<PtyKillResult, RpcError>> + '_ {
+    core.kill_pty_with_timeouts(
+        PtyKillParams { pty_id },
+        #[cfg(unix)]
+        Duration::from_millis(30),
+        Duration::from_millis(50),
+        Duration::from_millis(80),
+    )
+}
+
+async fn expect_kill_signal(
+    mut kill: Pin<&mut impl Future<Output = Result<PtyKillResult, RpcError>>>,
+    holder: &Receiver<Vec<u8>>,
+    pty_id: u32,
+    signal: i32,
+) {
+    poll_fn(|cx| {
+        assert!(kill.as_mut().poll(cx).is_pending());
+        match holder.try_recv() {
+            Ok(bytes) => {
+                assert_eq!(
+                    bytes,
+                    hproto::encode_json(hproto::SIGNAL, pty_id, &hproto::HolderSignal { signal })
+                );
+                Poll::Ready(())
+            }
+            Err(mpsc::TryRecvError::Empty) => Poll::Pending,
+            Err(err) => panic!("fake Holder disconnected: {err}"),
+        }
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_pty_sends_hangup_first_and_stops_when_child_exits() {
+    let (core, holder) = core();
+    let pty_id = spawn(&core, &holder, 1).await;
+    let (sub, channel) = inbox(&core);
+    spend_credit(&sub, channel, INITIAL_CREDIT);
+    core.session_send(message()).unwrap();
+    let mut kill = std::pin::pin!(kill_with_test_timeouts(&core, pty_id));
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::HANGUP).await;
+    let reason: CloseReason =
+        serde_json::from_slice(&frame(&sub, channel, FrameKind::Close)).unwrap();
+    assert_eq!(
+        reason,
+        CloseReason::Killed {
+            signal: Some(crate::pty::HANGUP)
+        }
+    );
+    assert!(core.session_send(message()).is_err());
+    core.handle_exited(
+        pty_id,
+        hproto::HolderExit {
+            code: Some(42),
+            signal: None,
+        },
+    );
+    assert_eq!(
+        kill.await.unwrap(),
+        PtyKillResult {
+            exit_code: Some(42),
+            signal: None,
+        }
+    );
+    assert_eq!(
+        holder.try_recv().unwrap(),
+        hproto::encode_frame(hproto::RELEASE, pty_id, &[])
+    );
+    assert!(holder.try_recv().is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_pty_escalates_hangup_to_term_and_stops_on_term_exit() {
+    let (core, holder) = core();
+    let pty_id = spawn(&core, &holder, 1).await;
+    let mut kill = std::pin::pin!(kill_with_test_timeouts(&core, pty_id));
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::HANGUP).await;
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::TERMINATE).await;
+    core.handle_exited(
+        pty_id,
+        hproto::HolderExit {
+            code: Some(0),
+            signal: None,
+        },
+    );
+    assert_eq!(
+        kill.await.unwrap(),
+        PtyKillResult {
+            exit_code: Some(0),
+            signal: None,
+        }
+    );
+    assert_eq!(
+        holder.try_recv().unwrap(),
+        hproto::encode_frame(hproto::RELEASE, pty_id, &[])
+    );
+    assert!(holder.try_recv().is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_pty_escalates_hangup_term_to_kill_and_errors_on_reap_timeout() {
+    let (core, holder) = core();
+    let pty_id = spawn(&core, &holder, 1).await;
+    let mut kill = std::pin::pin!(kill_with_test_timeouts(&core, pty_id));
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::HANGUP).await;
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::TERMINATE).await;
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, crate::pty::KILL).await;
+    let err = kill.await.unwrap_err();
+    assert_eq!(err.data.kind, ErrorKind::Unavailable);
+    assert_eq!(err.message, "timed out waiting for PTY child reap");
+    assert!(holder.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn kill_pty_returns_unavailable_if_holder_disconnects_before_escalation() {
+    let (core, holder) = core();
+    let pty_id = spawn(&core, &holder, 1).await;
+    let mut kill = std::pin::pin!(kill_with_test_timeouts(&core, pty_id));
+    #[cfg(unix)]
+    let initial = crate::pty::HANGUP;
+    #[cfg(not(unix))]
+    let initial = crate::pty::TERMINATE;
+    expect_kill_signal(kill.as_mut(), &holder, pty_id, initial).await;
+    core.handle_holder_disconnect();
+    let err = poll_fn(|cx| {
+        let Poll::Ready(result) = kill.as_mut().poll(cx) else {
+            panic!("kill did not wake on Holder disconnect");
+        };
+        Poll::Ready(result.unwrap_err())
+    })
+    .await;
+    assert_eq!(err.data.kind, ErrorKind::Unavailable);
+    assert_eq!(err.message, "holder disconnected during kill");
+    assert!(holder.try_recv().is_err());
 }

@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use ddg_agents_proto::frame::{DATA_CHUNK, INITIAL_CREDIT};
 use ddg_agents_proto::holder as hproto;
 use ddg_agents_proto::host::ExecutorSpec;
 use ddg_agents_proto::terminal::ControlMode;
@@ -142,6 +143,139 @@ impl Drop for Sandbox {
         std::thread::sleep(Duration::from_millis(50));
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+async fn next_data(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
+    expected_channel: u32,
+) -> (usize, usize, ddg_agents_transport::client::TabCredit) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.expect("event stream closed") {
+                HostEvent::DeferredStreamData {
+                    channel,
+                    bytes,
+                    credit,
+                    ..
+                } => {
+                    assert_eq!(channel, expected_channel);
+                    assert!(bytes.len() <= DATA_CHUNK);
+                    return (
+                        bytes.len(),
+                        bytes.iter().filter(|&&b| b == b'@').count(),
+                        credit,
+                    );
+                }
+                HostEvent::StreamData { .. } | HostEvent::StreamClose { .. } => {
+                    panic!("expected a live deferred DATA stream");
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for deferred DATA")
+}
+
+async fn no_tab_data(events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>) -> bool {
+    tokio::time::timeout(Duration::from_millis(150), async {
+        loop {
+            match events.recv().await.expect("event stream closed") {
+                HostEvent::DeferredStreamData { .. }
+                | HostEvent::StreamData { .. }
+                | HostEvent::StreamClose { .. } => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .is_err()
+}
+
+#[tokio::test]
+async fn deferred_tab_credit_stalls_and_resumes_real_core_through_host() {
+    let sb = Sandbox::new("credit");
+    let (client, mut events) =
+        HostClient::connect_once_with_deferred_tab_credit(sb.profile(None), "slow-viewer")
+            .await
+            .unwrap();
+    let done = sb.dir.join("producer-done");
+    let output_len = INITIAL_CREDIT + DATA_CHUNK * 8;
+    let created = client
+        .room_create(
+            None,
+            Some("/tmp".into()),
+            ExecutorSpec::Command {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!(
+                        "read -r line; head -c {output_len} /dev/zero | tr '\\000' '@'; : > '{}'; read -r line",
+                        done.display()
+                    ),
+                ],
+                env: BTreeMap::new(),
+            },
+            80,
+            24,
+            None,
+        )
+        .await
+        .unwrap();
+    let tab_id = created.room.tabs[0].id.clone();
+    let tab = client
+        .tab_attach(tab_id.clone(), true, 80, 24, 0)
+        .await
+        .unwrap();
+    assert!(client.send_input(tab.channel, b"go\n"));
+
+    let mut received = 0;
+    let mut markers = 0;
+    let mut held = Vec::new();
+    while received < INITIAL_CREDIT {
+        let (len, count, credit) = next_data(&mut events, tab.channel).await;
+        received += len;
+        markers += count;
+        held.push((len, credit));
+    }
+    assert_eq!(received, INITIAL_CREDIT);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !done.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("PTY producer must finish even with a stalled viewer");
+    client.ping().await.unwrap();
+    assert!(
+        no_tab_data(&mut events).await,
+        "core sent beyond the initial window"
+    );
+
+    let (released, credit) = held.pop().unwrap();
+    drop(credit);
+    let mut resumed = 0;
+    while resumed < released {
+        let (len, count, credit) = next_data(&mut events, tab.channel).await;
+        resumed += len;
+        markers += count;
+        held.push((len, credit));
+    }
+    assert_eq!(resumed, released);
+    assert!(
+        no_tab_data(&mut events).await,
+        "core sent more than the returned credit"
+    );
+
+    drop(held);
+    while markers < output_len {
+        let (_, count, credit) = next_data(&mut events, tab.channel).await;
+        markers += count;
+        drop(credit);
+    }
+    assert_eq!(markers, output_len);
+    client.tab_close(tab_id, None).await.unwrap();
+    client.close();
 }
 
 #[tokio::test]

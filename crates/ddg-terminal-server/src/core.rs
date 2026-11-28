@@ -34,23 +34,20 @@ mod core_activity_and_lifecycle {
         holder
             .write_all(&hproto::encode_frame(hproto::TAIL, 1, tail))
             .unwrap();
-        let (ptys, next_id, fg_pgrp, instance) = recover_ptys(&mut core).unwrap();
-        holder.set_nonblocking(true).unwrap();
-        assert_eq!(
-            hproto::read_frame(&mut holder).unwrap_err().kind(),
-            io::ErrorKind::WouldBlock
-        );
         let (tx, rx) = mpsc::channel();
-        let core = Core::new(
+        let core = Core::from_holder(
             ServerIdentity {
                 server_id: "test".into(),
                 boot_generation: 1,
             },
             tx,
-            ptys,
-            next_id,
-            fg_pgrp,
-            instance,
+            &mut core,
+        )
+        .unwrap();
+        holder.set_nonblocking(true).unwrap();
+        assert_eq!(
+            hproto::read_frame(&mut holder).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
         );
         (Arc::new(core), rx)
     }
@@ -161,6 +158,146 @@ mod core_activity_and_lifecycle {
         }
     }
 
+    #[test]
+    fn foreground_cache_refreshes_and_clears_stale_hints() {
+        let (core, _) = recovered_core(vec!["fg_pgrp_v1".into()], b"");
+        let now = Instant::now();
+        let hint = |pid, comm: &str, script: Option<&str>| ForegroundHint {
+            pid,
+            comm: comm.into(),
+            script_hint: script.map(str::to_owned),
+        };
+        let inspect = |pgrp, at, found: Option<ForegroundHint>| {
+            core.handle_foreground(
+                0,
+                hproto::HolderFgPgrpBatch {
+                    entries: vec![hproto::HolderFgPgrp {
+                        pty_id: 1,
+                        pgrp: Some(pgrp),
+                    }],
+                },
+                at,
+                |pgid, pid| {
+                    assert_eq!((pgid, pid), (pgrp, 100));
+                    found.clone()
+                },
+            );
+            assert_eq!(core.list_ptys()[0].foreground, found);
+        };
+        inspect(100, now, Some(hint(100, "sh", None)));
+        core.handle_foreground(
+            0,
+            hproto::HolderFgPgrpBatch {
+                entries: vec![hproto::HolderFgPgrp {
+                    pty_id: 1,
+                    pgrp: Some(100),
+                }],
+            },
+            now + FOREGROUND_INTERVAL,
+            |_, _| panic!("fresh hint; do not inspect"),
+        );
+        assert_eq!(core.list_ptys()[0].foreground, Some(hint(100, "sh", None)));
+        inspect(
+            101,
+            now + FOREGROUND_INTERVAL,
+            Some(hint(101, "node", Some("first.js"))),
+        );
+        let expired = now + FOREGROUND_INTERVAL + FOREGROUND_TTL;
+        inspect(101, expired, Some(hint(101, "node", Some("second.js"))));
+        inspect(101, expired + FOREGROUND_TTL, None); // failed validation / vanished PID
+        inspect(101, expired + FOREGROUND_TTL, Some(hint(101, "sh", None))); // no negative cache
+        core.handle_foreground(
+            0,
+            hproto::HolderFgPgrpBatch { entries: vec![] },
+            expired + FOREGROUND_TTL,
+            |_, _| panic!("no foreground group"),
+        );
+        assert_eq!(core.list_ptys()[0].foreground, None);
+        inspect(101, expired + FOREGROUND_TTL, Some(hint(101, "zsh", None)));
+        core.handle_exited(
+            1,
+            hproto::HolderExit {
+                code: Some(0),
+                signal: None,
+            },
+        );
+        core.handle_foreground(
+            0,
+            hproto::HolderFgPgrpBatch {
+                entries: vec![hproto::HolderFgPgrp {
+                    pty_id: 1,
+                    pgrp: Some(101),
+                }],
+            },
+            expired + FOREGROUND_TTL,
+            |_, _| panic!("late reply for exited PTY"),
+        );
+        assert!(core.list_ptys().is_empty());
+    }
+
+    #[test]
+    fn equivalent_osc_cwd_does_not_emit_a_second_event() {
+        let (core, _) = recovered_core(vec![], b"");
+        let conn = Arc::new(Conn::new(1));
+        let channel = core.subscribe(&conn).channel.unwrap();
+        conn.with_outbox(|out| out.resume(channel));
+        core.handle_output(1, b"\x1b]7;file://localhost/tmp/my%20project\x07");
+        let frame = conn.next_frame().unwrap();
+        let note: serde_json::Value = serde_json::from_slice(&frame[9..]).unwrap();
+        assert!(matches!(
+            serde_json::from_value::<PtyEvent>(note["params"]["event"].clone()).unwrap(),
+            PtyEvent::CwdChanged { cwd, .. } if cwd == "/tmp/my project"
+        ));
+        core.handle_output(1, b"\x1b]7;file://localhost/tmp/%6dy%20project\x07");
+        assert!(conn.next_frame().is_none());
+    }
+
+    #[tokio::test]
+    async fn ut_term_02_negotiation_and_pending_cleanup() {
+        use std::task::{Context, Poll, Waker};
+
+        let (old, holder) = recovered_core(vec!["fg_pgrp_v1".into()], b"");
+        assert_eq!(old.probe_bins().await, holder::unknown_bins());
+        assert!(holder.try_recv().is_err());
+
+        let (core, holder) = recovered_core(vec![hproto::FEATURE_PROBE_BINS_V1.into()], b"");
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut cancelled = Box::pin(core.probe_bins());
+        assert!(cancelled.as_mut().poll(&mut cx).is_pending());
+        let frame = holder.try_recv().unwrap();
+        let (kind, stale, _) = hproto::read_frame(&mut frame.as_slice()).unwrap().unwrap();
+        assert_eq!(kind, hproto::QUERY_BINS);
+        assert_eq!(core.probe_bins().await, holder::unknown_bins());
+        assert!(holder.try_recv().is_err());
+        drop(cancelled);
+        assert!(core.lock().pending_probe.is_none());
+
+        let mut timed = Box::pin(core.probe_bins());
+        assert!(timed.as_mut().poll(&mut cx).is_pending());
+        let frame = holder.try_recv().unwrap();
+        let (_, current, _) = hproto::read_frame(&mut frame.as_slice()).unwrap().unwrap();
+        assert_ne!(stale, current);
+        core.handle_holder_frame(
+            hproto::BINS_RESULT,
+            stale,
+            serde_json::to_vec(&holder::unknown_bins()).unwrap(),
+        );
+        assert!(matches!(timed.as_mut().poll(&mut cx), Poll::Pending));
+        assert_eq!(timed.await, holder::unknown_bins());
+        assert!(core.lock().pending_probe.is_none());
+
+        let mut disconnected = Box::pin(core.probe_bins());
+        assert!(disconnected.as_mut().poll(&mut cx).is_pending());
+        let (stream, peer) = LocalStream::pair().unwrap();
+        drop(peer);
+        core.clone().read_holder_loop(stream);
+        assert!(core.lock().pending_probe.is_none());
+        assert_eq!(disconnected.await, holder::unknown_bins());
+        holder.try_recv().unwrap();
+        assert_eq!(core.probe_bins().await, holder::unknown_bins());
+        assert!(holder.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn goodbye_waits_for_bye() {
         use std::task::{Context, Poll, Waker};
@@ -193,8 +330,8 @@ use ddg_agents_proto::rpc::{ErrorKind, Notification, RpcError};
 use ddg_agents_proto::terminal::{
     AgentStatus, CloseReason, ControlMode, ForegroundHint, PtyAttachParams, PtyAttachResult,
     PtyClaimControlParams, PtyClaimControlResult, PtyEvent, PtyInfo, PtyKillParams, PtyKillResult,
-    PtyReleaseControlParams, PtyReleaseControlResult, PtySpawnParams, PtySpawnResult,
-    PtySubscribeResult, SessionInboxSubscribeParams, SessionInboxSubscribeResult,
+    PtyProbeBinsResult, PtyReleaseControlParams, PtyReleaseControlResult, PtySpawnParams,
+    PtySpawnResult, PtySubscribeResult, SessionInboxSubscribeParams, SessionInboxSubscribeResult,
     SessionReadScreenParams, SessionReadScreenResult, SessionRecvParams, SessionRecvResult,
     SessionSendParams, SessionSendResult, SessionWriteInputParams, SessionWriteInputResult,
 };
@@ -211,7 +348,15 @@ use tokio::sync::{Notify, oneshot};
 
 const STATUS_DELAY: Duration = Duration::from_millis(200);
 const FOREGROUND_INTERVAL: Duration = Duration::from_secs(1);
+const FOREGROUND_TTL: Duration = Duration::from_millis(1500);
 const DETACH_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(unix)]
+const KILL_HANGUP_GRACE: Duration = Duration::from_millis(150);
+#[cfg(unix)]
+const KILL_TERM_GRACE: Duration = Duration::from_millis(650);
+#[cfg(not(unix))]
+const KILL_TERM_GRACE: Duration = Duration::from_millis(800);
+const KILL_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct StatusCoalescer {
@@ -299,6 +444,7 @@ struct LivePty {
     relay: Relay,
     agent_status: Option<AgentStatus>,
     foreground: Option<ForegroundHint>,
+    foreground_sampled_at: Option<Instant>,
     status_coalescer: StatusCoalescer,
     control: ControlState,
     viewers: Vec<Viewer>,
@@ -367,6 +513,9 @@ struct CoreState {
     ptys: HashMap<u32, LivePty>,
     mailboxes: Mailboxes,
     pending_spawns: HashMap<u32, PendingSpawn>,
+    probe_bins_supported: bool,
+    next_probe_id: u32,
+    pending_probe: Option<(u32, oneshot::Sender<PtyProbeBinsResult>)>,
     pending_kills: HashMap<u32, Vec<oneshot::Sender<hproto::HolderExit>>>,
     event_seq: u64,
     event_subs: Vec<EventSub>,
@@ -378,11 +527,23 @@ pub struct Core {
     holder_fg_pgrp: bool,
     pub holder_instance: String,
     holder_bye: Notify,
+    foreground_active_changed: Notify,
     status_pending: Notify,
     state: Mutex<CoreState>,
     next_conn_id: AtomicU64,
     pub stop: Notify,
     pub stopping: AtomicBool,
+}
+
+struct PendingProbe<'a> {
+    core: &'a Core,
+    id: u32,
+}
+
+impl Drop for PendingProbe<'_> {
+    fn drop(&mut self) {
+        self.core.take_pending_probe(self.id);
+    }
 }
 
 impl Core {
@@ -400,8 +561,8 @@ impl Core {
             },
         );
         stream.write_all(&hello)?;
-        let (ptys, next_pty_id, holder_fg_pgrp, instance) = recover_ptys(&mut stream)?;
         let (holder_tx, holder_rx) = mpsc::channel::<Vec<u8>>();
+        let core = Arc::new(Self::from_holder(identity, holder_tx, &mut stream)?);
 
         let mut writer_stream = stream.try_clone()?;
         std::thread::Builder::new()
@@ -414,20 +575,32 @@ impl Core {
                 }
             })?;
 
-        let core = Arc::new(Self::new(
-            identity,
-            holder_tx,
-            ptys,
-            next_pty_id,
-            holder_fg_pgrp,
-            instance,
-        ));
-
         let reader_core = core.clone();
         std::thread::Builder::new()
             .name("core-holder-reader".into())
             .spawn(move || reader_core.read_holder_loop(stream))?;
 
+        Ok(core)
+    }
+
+    fn from_holder(
+        identity: ServerIdentity,
+        holder_tx: Sender<Vec<u8>>,
+        stream: &mut LocalStream,
+    ) -> io::Result<Self> {
+        let (ptys, next_pty_id, welcome) = recover_holder(stream)?;
+        let supports = |name| welcome.features.iter().any(|feature| feature == name);
+        let fg_pgrp = supports("fg_pgrp_v1");
+        let probe_bins = supports(hproto::FEATURE_PROBE_BINS_V1);
+        let core = Self::new(
+            identity,
+            holder_tx,
+            ptys,
+            next_pty_id,
+            fg_pgrp,
+            welcome.instance,
+        );
+        core.lock().probe_bins_supported = probe_bins;
         Ok(core)
     }
 
@@ -454,12 +627,16 @@ impl Core {
             holder_fg_pgrp,
             holder_instance,
             holder_bye: Notify::new(),
+            foreground_active_changed: Notify::new(),
             status_pending: Notify::new(),
             state: Mutex::new(CoreState {
                 next_pty_id,
                 ptys,
                 mailboxes,
                 pending_spawns: HashMap::new(),
+                probe_bins_supported: false,
+                next_probe_id: 1,
+                pending_probe: None,
                 pending_kills: HashMap::new(),
                 event_seq: 0,
                 event_subs: Vec::new(),
@@ -486,6 +663,16 @@ impl Core {
     fn read_holder_loop(self: Arc<Self>, mut stream: LocalStream) {
         while let Ok(Some((kind, pty_id, payload))) = hproto::read_frame(&mut stream) {
             self.handle_holder_frame(kind, pty_id, payload);
+        }
+        self.handle_holder_disconnect();
+    }
+
+    fn handle_holder_disconnect(&self) {
+        {
+            let mut st = self.lock();
+            st.probe_bins_supported = false;
+            st.pending_probe = None;
+            st.pending_kills.clear();
         }
         // Holder exited or handed ownership to a newer Core: shut down cleanly.
         self.stop.notify_one();
@@ -515,7 +702,19 @@ impl Core {
             }
             hproto::FG_PGRP if self.holder_fg_pgrp => {
                 if let Ok(batch) = hproto::parse_json(&payload) {
-                    self.handle_foreground(batch);
+                    self.handle_foreground(
+                        pty_id,
+                        batch,
+                        Instant::now(),
+                        proc_info::inspect_foreground,
+                    );
+                }
+            }
+            hproto::BINS_RESULT => {
+                if let Some(reply) = self.take_pending_probe(pty_id)
+                    && let Ok(result) = hproto::parse_json(&payload)
+                {
+                    let _ = reply.send(result);
                 }
             }
             hproto::BYE => self.holder_bye.notify_one(),
@@ -523,52 +722,113 @@ impl Core {
         }
     }
 
+    fn take_pending_probe(&self, id: u32) -> Option<oneshot::Sender<PtyProbeBinsResult>> {
+        let mut st = self.lock();
+        if st
+            .pending_probe
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == id)
+        {
+            st.pending_probe.take().map(|(_, reply)| reply)
+        } else {
+            None
+        }
+    }
+
+    pub async fn probe_bins(&self) -> PtyProbeBinsResult {
+        let (pending, reply) = {
+            let mut st = self.lock();
+            if !st.probe_bins_supported || st.pending_probe.is_some() {
+                return holder::unknown_bins();
+            }
+            let id = st.next_probe_id;
+            // A timed-out Holder reply may still arrive; do not reuse IDs on this connection.
+            let Some(next_id) = id.checked_add(1) else {
+                return holder::unknown_bins();
+            };
+            st.next_probe_id = next_id;
+            let (tx, rx) = oneshot::channel();
+            st.pending_probe = Some((id, tx));
+            (PendingProbe { core: self, id }, rx)
+        };
+        let frame =
+            hproto::encode_json(hproto::QUERY_BINS, pending.id, &hproto::HolderProbeBins {});
+        if self.send_holder(frame)
+            && let Ok(Ok(result)) = tokio::time::timeout(Duration::from_secs(3), reply).await
+        {
+            return result;
+        }
+        holder::unknown_bins()
+    }
+
     pub async fn poll_foreground(&self) {
         if !self.holder_fg_pgrp {
             return;
         }
-        let mut tick = tokio::time::interval(FOREGROUND_INTERVAL);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        tick.tick().await;
         loop {
-            tick.tick().await;
-            self.query_foreground();
+            let has_live = !self.lock().ptys.is_empty();
+            if has_live {
+                tokio::select! {
+                    _ = self.foreground_active_changed.notified() => {},
+                    _ = tokio::time::sleep(FOREGROUND_INTERVAL) => self.query_foreground(),
+                }
+            } else {
+                self.foreground_active_changed.notified().await;
+            }
         }
     }
 
     fn query_foreground(&self) {
-        let has_live = !self.lock().ptys.is_empty();
-        if self.holder_fg_pgrp && has_live {
+        if self.holder_fg_pgrp && !self.lock().ptys.is_empty() {
             self.send_holder(hproto::encode_frame(hproto::QUERY_FG_PGRP, 0, &[]));
         }
     }
 
-    fn handle_foreground(&self, batch: hproto::HolderFgPgrpBatch) {
+    fn handle_foreground(
+        &self,
+        queried_id: u32,
+        batch: hproto::HolderFgPgrpBatch,
+        now: Instant,
+        inspect: impl Fn(u32, u32) -> Option<ForegroundHint>,
+    ) {
+        let groups: HashMap<_, _> = batch
+            .entries
+            .into_iter()
+            .map(|e| (e.pty_id, e.pgrp))
+            .collect();
         let live: Vec<_> = {
             let st = self.lock();
-            batch
-                .entries
-                .into_iter()
-                .filter_map(|entry| {
-                    let pty = st.ptys.get(&entry.pty_id)?;
-                    Some((entry.pty_id, pty.pid, entry.pgrp))
+            st.ptys
+                .values()
+                .filter_map(|pty| {
+                    if queried_id != 0 && queried_id != pty.pty_id {
+                        return None;
+                    }
+                    let pgrp = groups.get(&pty.pty_id).copied().flatten();
+                    // Display hints only. Reinspect from scratch at expiry, even for a stable pgid:
+                    // PID reuse, exec, credentials and interpreter argv can change independently.
+                    if pgrp.is_some()
+                        && pgrp == pty.foreground.as_ref().map(|hint| hint.pid)
+                        && pty
+                            .foreground_sampled_at
+                            .is_some_and(|at| now - at < FOREGROUND_TTL)
+                    {
+                        return None;
+                    }
+                    Some((pty.pty_id, pty.pid, pgrp))
                 })
                 .collect()
         };
         let updates: Vec<_> = live
             .into_iter()
-            .map(|(id, pid, pgrp)| {
-                (
-                    id,
-                    pgrp.and_then(|pgid| proc_info::inspect_foreground(pgid, pid)),
-                )
-            })
+            .map(|(id, pid, pgrp)| (id, pgrp.and_then(|pgid| inspect(pgid, pid))))
             .collect();
         let mut st = self.lock();
         for (pty_id, foreground) in updates {
             let Some(pty) = st.ptys.get_mut(&pty_id) else {
                 continue;
             };
+            pty.foreground_sampled_at = foreground.as_ref().map(|_| now);
             if pty.foreground == foreground {
                 continue;
             }
@@ -605,6 +865,7 @@ impl Core {
             relay: Relay::default(),
             agent_status: None,
             foreground: None,
+            foreground_sampled_at: None,
             status_coalescer: StatusCoalescer::default(),
             control: ControlState::default(),
             viewers: Vec::new(),
@@ -617,7 +878,11 @@ impl Core {
         }
         st.mailboxes.open(&pty.session_id, pty_id);
         let info = pty.info();
+        let was_empty = st.ptys.is_empty();
         st.ptys.insert(pty_id, pty);
+        if was_empty && self.holder_fg_pgrp {
+            self.foreground_active_changed.notify_one();
+        }
         self.emit_event(&mut st, PtyEvent::Spawned { pty: info });
         let _ = pending.reply.send(Ok(msg.pid));
     }
@@ -753,6 +1018,9 @@ impl Core {
     fn handle_exited(&self, pty_id: u32, exit: hproto::HolderExit) {
         let mut st = self.lock();
         if let Some(pty) = st.ptys.remove(&pty_id) {
+            if st.ptys.is_empty() && self.holder_fg_pgrp {
+                self.foreground_active_changed.notify_one();
+            }
             let reason = CloseReason::Exited {
                 exit_code: exit.code,
                 signal: exit.signal,
@@ -1165,26 +1433,58 @@ impl Core {
     }
 
     pub async fn kill_pty(&self, params: PtyKillParams) -> Result<PtyKillResult, RpcError> {
-        let rx = {
-            let mut st = self.lock();
-            let pty = st.ptys.get(&params.pty_id).ok_or_else(|| {
-                RpcError::not_found(format!("no live PTY with id {}", params.pty_id))
-            })?;
-            let session_id = pty.session_id.clone();
-            let signal = crate::pty::TERMINATE;
-            // Graceful termination first, escalating to SIGKILL on timeout.
-            if !self.send_holder(hproto::encode_json(
+        self.kill_pty_with_timeouts(
+            params,
+            #[cfg(unix)]
+            KILL_HANGUP_GRACE,
+            KILL_TERM_GRACE,
+            KILL_REAP_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn kill_pty_with_timeouts(
+        &self,
+        params: PtyKillParams,
+        #[cfg(unix)] hangup_grace: Duration,
+        term_grace: Duration,
+        reap_timeout: Duration,
+    ) -> Result<PtyKillResult, RpcError> {
+        let pty_id = params.pty_id;
+        let disconnected = || {
+            RpcError::new(
+                ErrorKind::Unavailable,
+                "holder disconnected during kill",
+                None,
+            )
+        };
+        let reaped = |exit: hproto::HolderExit| PtyKillResult {
+            exit_code: exit.code,
+            signal: exit.signal,
+        };
+        let send_signal = |signal| {
+            self.send_holder(hproto::encode_json(
                 hproto::SIGNAL,
-                params.pty_id,
+                pty_id,
                 &hproto::HolderSignal { signal },
-            )) {
-                return Err(RpcError::new(
-                    ErrorKind::Unavailable,
-                    "holder disconnected during kill",
-                    None,
-                ));
+            ))
+        };
+        // Interactive Unix shells may ignore TERM, but honor a terminal hangup.
+        #[cfg(unix)]
+        let signal = crate::pty::HANGUP;
+        #[cfg(not(unix))]
+        let signal = crate::pty::TERMINATE;
+        let mut rx = {
+            let mut st = self.lock();
+            let pty = st
+                .ptys
+                .get(&pty_id)
+                .ok_or_else(|| RpcError::not_found(format!("no live PTY with id {pty_id}")))?;
+            let session_id = pty.session_id.clone();
+            if !send_signal(signal) {
+                return Err(disconnected());
             }
-            if st.mailboxes.owner(&session_id) == Some(params.pty_id) {
+            if st.mailboxes.owner(&session_id) == Some(pty_id) {
                 st.mailboxes.purge_session(
                     &session_id,
                     &CloseReason::Killed {
@@ -1193,43 +1493,34 @@ impl Core {
                 );
             }
             let (tx, rx) = oneshot::channel();
-            st.pending_kills.entry(params.pty_id).or_default().push(tx);
+            st.pending_kills.entry(pty_id).or_default().push(tx);
             rx
         };
-        let mut rx = rx;
-        let exit = match tokio::time::timeout(Duration::from_millis(800), &mut rx).await {
-            Ok(Ok(exit)) => exit,
-            Ok(Err(_)) => {
-                return Err(RpcError::new(
-                    ErrorKind::Unavailable,
-                    "holder disconnected during kill",
-                    None,
-                ));
+        for (grace, next_signal) in [
+            #[cfg(unix)]
+            (hangup_grace, crate::pty::TERMINATE),
+            (term_grace, crate::pty::KILL),
+        ] {
+            if let Ok(exit) = tokio::time::timeout(grace, &mut rx).await {
+                return exit.map(reaped).map_err(|_| disconnected());
             }
-            Err(_) => {
-                self.send_holder(hproto::encode_json(
-                    hproto::SIGNAL,
-                    params.pty_id,
-                    &hproto::HolderSignal {
-                        signal: crate::pty::KILL,
-                    },
-                ));
-                match tokio::time::timeout(Duration::from_secs(5), rx).await {
-                    Ok(Ok(exit)) => exit,
-                    _ => {
-                        return Err(RpcError::new(
-                            ErrorKind::Unavailable,
-                            "timed out waiting for PTY child reap",
-                            None,
-                        ));
-                    }
-                }
+            let sent = {
+                // EXITED and Holder disconnect both remove waiters under this lock.
+                let st = self.lock();
+                st.pending_kills.contains_key(&pty_id) && send_signal(next_signal)
+            };
+            if !sent {
+                return rx.try_recv().map(reaped).map_err(|_| disconnected());
             }
-        };
-        Ok(PtyKillResult {
-            exit_code: exit.code,
-            signal: exit.signal,
-        })
+        }
+        match tokio::time::timeout(reap_timeout, rx).await {
+            Ok(exit) => exit.map(reaped).map_err(|_| disconnected()),
+            Err(_) => Err(RpcError::new(
+                ErrorKind::Unavailable,
+                "timed out waiting for PTY child reap",
+                None,
+            )),
+        }
     }
 
     pub fn viewer_input(&self, conn: &Arc<Conn>, channel: u32, bytes: &[u8]) {
@@ -1346,10 +1637,22 @@ impl Core {
     }
 }
 
+#[cfg(all(test, unix))]
 fn recover_ptys(
     stream: &mut LocalStream,
 ) -> io::Result<(HashMap<u32, LivePty>, u32, bool, String)> {
-    let welcome = match hproto::read_frame(stream)? {
+    let (ptys, next_id, welcome) = recover_holder(stream)?;
+    let fg_pgrp = welcome
+        .features
+        .iter()
+        .any(|feature| feature == "fg_pgrp_v1");
+    Ok((ptys, next_id, fg_pgrp, welcome.instance))
+}
+
+fn recover_holder(
+    stream: &mut LocalStream,
+) -> io::Result<(HashMap<u32, LivePty>, u32, hproto::HolderWelcome)> {
+    let mut welcome = match hproto::read_frame(stream)? {
         Some((hproto::WELCOME, _, payload)) => {
             hproto::parse_json::<hproto::HolderWelcome>(&payload)?
         }
@@ -1360,12 +1663,8 @@ fn recover_ptys(
     }
     let mut live = HashMap::new();
     let mut max_id = 0;
-    let holder_fg_pgrp = welcome
-        .features
-        .iter()
-        .any(|feature| feature == "fg_pgrp_v1");
     let tail_count = welcome.ptys.len();
-    for held in welcome.ptys {
+    for held in welcome.ptys.drain(..) {
         max_id = max_id.max(held.pty_id);
         if held.exit.is_some() {
             stream.write_all(&hproto::encode_frame(hproto::RELEASE, held.pty_id, &[]))?;
@@ -1403,6 +1702,7 @@ fn recover_ptys(
                 relay,
                 agent_status,
                 foreground: None,
+                foreground_sampled_at: None,
                 status_coalescer: StatusCoalescer::default(),
                 control: ControlState::default(),
                 viewers: Vec::new(),
@@ -1412,7 +1712,7 @@ fn recover_ptys(
     if !live.is_empty() {
         return Err(io::Error::other("holder did not send all live PTY tails"));
     }
-    Ok((ptys, max_id + 1, holder_fg_pgrp, welcome.instance))
+    Ok((ptys, max_id + 1, welcome))
 }
 
 fn session_pty<'a>(st: &'a CoreState, session: &str) -> Result<&'a LivePty, RpcError> {

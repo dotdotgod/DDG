@@ -3,7 +3,7 @@
 mod ffi;
 mod osc7501;
 pub mod relay;
-mod terminal;
+pub mod terminal;
 
 pub use relay::{Relay, RelayOutput};
 pub use terminal::{

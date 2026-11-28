@@ -75,6 +75,7 @@ impl Fixture {
             relay: Relay::default(),
             state: Mutex::new(HostState {
                 catalog,
+                catalog_save_pending: false,
                 activities: HashMap::new(),
                 seq: 0,
                 reset_notice: None,
@@ -111,7 +112,7 @@ impl Fixture {
         self.respond(Response::ok(req.id, value)).await;
     }
 
-    async fn respond(&mut self, response: Response) {
+    pub(crate) async fn respond(&mut self, response: Response) {
         let reply = serde_json::to_vec(&response).unwrap();
         self.peer
             .get_mut()
@@ -125,6 +126,91 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.root).unwrap();
     }
+}
+
+#[tokio::test]
+async fn ut_host_02_relay_rejects_preset_detection() {
+    let f = Fixture::new(fixture_catalog()).await;
+    let (tx, mut outgoing) = mpsc::unbounded_channel();
+    let wire = f.host.relay.attach(1, 2, tx, true, || false).unwrap();
+    let (ready, go) = tokio::sync::oneshot::channel();
+    let relay = tokio::spawn(wire.run(f.host.clone(), 1, go));
+    ready.send(()).unwrap();
+    let method = "host.agent_presets_detect";
+    assert!(!crate::hub::allowed(method));
+    let req = RelayFrame::Request {
+        envelope: RelayEnvelope {
+            hop: 1,
+            request_id: "probe".into(),
+            method: method.into(),
+            params: json!({"from_session_id": CHILD}),
+            from_host_id: "hub".into(),
+        },
+    };
+    let mut payload = serde_json::to_vec(&req).unwrap();
+    payload.push(b'\n');
+    assert!(f.host.relay.feed(1, Frame::data(2, payload)).is_none());
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(1), outgoing.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let (channel, kind, _) = decode_header(frame[..HEADER_LEN].try_into().unwrap()).unwrap();
+        assert_eq!(channel, 2);
+        if kind == FrameKind::Credit {
+            continue;
+        }
+        assert_eq!(kind, FrameKind::Data);
+        let reply: RelayFrame = serde_json::from_slice(&frame[HEADER_LEN..]).unwrap();
+        assert!(matches!(reply, RelayFrame::Error { request_id, error }
+            if request_id == "probe" && error.data.kind == ErrorKind::PermissionDenied));
+        break;
+    }
+    f.host.relay.detach(1, None);
+    relay.await.unwrap();
+}
+
+#[tokio::test]
+async fn ut_host_02_plugin_reverse_calls_cannot_detect_presets() {
+    let f = Fixture::new(fixture_catalog()).await;
+    let dir = f.host.paths.plugins_dir.join("boundary");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.json"),
+        json!({
+            "name": "boundary", "version": "1", "command": ["/bin/sh", "probe.sh"],
+            "capabilities": ["host_read", "host_write", "pty_observe", "pty_control"],
+            "timeout_ms": 1500,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("probe.sh"), r#"
+IFS= read -r hello || exit 1
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"name":"boundary","version":"1","methods":[{"name":"ext.boundary.check"}]}}'
+IFS= read -r check || exit 1
+for method in host.agent_presets_detect pty.probe_bins; do
+    printf '{"jsonrpc":"2.0","id":9,"method":"%s","params":{}}\n' "$method"
+    IFS= read -r reply || exit 1
+    case "$reply" in
+        *'"code":-32008'*) ;;
+        *) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":false}'; exit ;;
+    esac
+done
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":true}'
+"#).unwrap();
+    f.host
+        .plugins
+        .load_dir(&f.host.paths.plugins_dir, Arc::downgrade(&f.host))
+        .await;
+    assert_eq!(
+        f.host
+            .plugins
+            .call_ext("ext.boundary.check", json!({}))
+            .await
+            .unwrap(),
+        json!(true)
+    );
 }
 
 pub(crate) fn fixture_catalog() -> Catalog {
@@ -464,6 +550,68 @@ async fn terminal_titles_are_sanitized_and_stale_generations_are_ignored() {
             .await;
         assert_eq!(f.host.lookup_tab_any(PARENT).unwrap().title, "clean title");
     }
+}
+
+#[tokio::test]
+async fn metadata_saves_only_changes_and_retries_failed_publish() {
+    use std::os::unix::fs::MetadataExt;
+
+    let f = Fixture::new(fixture_catalog()).await;
+    let (tx, mut deltas) = mpsc::unbounded_channel();
+    f.host.catalog_subscribe(1, 2, tx);
+    let file = &f.host.paths.catalog_file;
+    let title = |title: &str| PtyEvent::TitleChanged {
+        pty_id: 10,
+        session_id: PARENT.into(),
+        run_generation: 1,
+        title: title.into(),
+    };
+    let cwd = |cwd: &str| PtyEvent::CwdChanged {
+        pty_id: 10,
+        session_id: PARENT.into(),
+        run_generation: 1,
+        cwd: cwd.into(),
+    };
+    f.event(title("clean\u{061c} title")).await;
+    let original = File::open(file).unwrap();
+    f.event(cwd("/tmp/pro\u{202e}ject")).await;
+    let saved = File::open(file).unwrap();
+    assert_ne!(
+        saved.metadata().unwrap().ino(),
+        original.metadata().unwrap().ino()
+    );
+    let (catalog, _) = load_catalog(file, "test").unwrap();
+    let room = &catalog.rooms[0];
+    assert_eq!(room.tabs[0].title, "clean title");
+    assert_eq!(
+        room.tabs[0].last_cwd.as_deref(),
+        Some("/tmp/pro\u{202e}ject")
+    );
+    assert_eq!(room.auto_name, "project");
+    for _ in 0..2 {
+        let note: Notification = serde_json::from_slice(&deltas.try_recv().unwrap()).unwrap();
+        assert_eq!(note.method, "host.catalog_changed");
+    }
+    f.event(title("clean title")).await;
+    f.event(cwd("/tmp/pro\u{202e}ject")).await;
+    assert!(deltas.try_recv().is_err());
+    assert_eq!(
+        file.metadata().unwrap().ino(),
+        saved.metadata().unwrap().ino()
+    );
+
+    std::fs::remove_file(file).unwrap();
+    std::fs::create_dir(file).unwrap();
+    f.event(title("needs retry")).await;
+    assert!(f.host.lock().catalog_save_pending);
+    assert_eq!(f.host.lookup_tab_any(PARENT).unwrap().title, "needs retry");
+    assert!(deltas.try_recv().is_ok());
+    std::fs::remove_dir(file).unwrap();
+    f.event(title("needs\u{061c} retry")).await;
+    assert!(!f.host.lock().catalog_save_pending);
+    assert!(deltas.try_recv().is_err());
+    let (catalog, _) = load_catalog(file, "test").unwrap();
+    assert_eq!(catalog.rooms[0].tabs[0].title, "needs retry");
 }
 
 fn test_status(state: AgentState, progress: Option<u8>) -> AgentStatus {

@@ -34,6 +34,7 @@ pub fn terminal_server_openrpc() -> Value {
             method::<terminal::PingParams, terminal::PingResult>("ping", "Health check returning server identity and boot generation."),
             method::<terminal::PtySpawnParams, terminal::PtySpawnResult>("pty.spawn", "Spawn an OS PTY process."),
             method::<terminal::PtyListParams, terminal::PtyListResult>("pty.list", "List live PTYs."),
+            method::<terminal::PtyProbeBinsParams, terminal::PtyProbeBinsResult>("pty.probe_bins", "Check the fixed built-in executable basenames in the Holder environment without executing them."),
             method::<terminal::PtySubscribeParams, terminal::PtySubscribeResult>("pty.subscribe", "Subscribe to PTY lifecycle, size, title, CWD, control, agent status, and foreground changes."),
             method::<terminal::PtyAttachParams, terminal::PtyAttachResult>("pty.attach", "Attach to a PTY stream; receives first_paint VT snapshot followed by live output."),
             method::<terminal::PtyClaimControlParams, terminal::PtyClaimControlResult>("pty.claim_control", "Claim exclusive input/resize control over a PTY."),
@@ -68,6 +69,7 @@ pub fn agents_host_openrpc() -> Value {
             method::<terminal::HelloParams, host::HostHelloResult>("hello", "Negotiate protocol version and optionally upgrade to 9-byte binary framed mode."),
             method::<terminal::PingParams, terminal::PingResult>("ping", "Health check verifying host and underlying ddg-terminal-server."),
             method::<host::CatalogSubscribeParams, host::CatalogSubscribeResult>("host.catalog_subscribe", "Fetch the room/tab catalog and tab activity snapshot and subscribe to changes."),
+            method::<host::HostAgentPresetsDetectParams, host::HostAgentPresetsDetectResult>("host.agent_presets_detect", "Check availability of the fixed built-in agent presets as the operator."),
             method::<host::RoomCreateParams, host::RoomCreateResult>("host.room_create", "Create a new room with its first tab."),
             method::<host::RoomRenameParams, host::RoomRenameResult>("host.room_rename", "Rename a room (null reverts to auto folder name)."),
             method::<host::RoomSetLayoutParams, host::RoomSetLayoutResult>("host.room_set_layout", "Replace or reset a visible room's persisted pane layout as the operator."),
@@ -140,6 +142,42 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("schema")
+    }
+
+    // UT-PROTO-02
+    #[test]
+    fn preset_probe_methods_require_empty_object_params() {
+        for (doc, name, item_key) in [
+            (terminal_server_openrpc(), "pty.probe_bins", "bin"),
+            (agents_host_openrpc(), "host.agent_presets_detect", "id"),
+        ] {
+            let mut methods = doc["methods"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["name"] == name);
+            let method = methods.next().expect(name);
+            assert!(methods.next().is_none(), "duplicate method {name}");
+            let params = &method["params"][0]["schema"];
+            assert_eq!(params["type"], "object");
+            assert_eq!(params["additionalProperties"], false);
+            assert!(
+                params["properties"]
+                    .as_object()
+                    .is_none_or(|p| p.is_empty())
+            );
+            let result = &method["result"]["schema"];
+            assert_eq!(result["required"], json!(["items"]));
+            let defs = result["$defs"].as_object().unwrap();
+            assert!(
+                defs.values()
+                    .any(|s| s["required"] == json!([item_key, "status"]))
+            );
+            assert!(
+                defs.values()
+                    .any(|s| s["enum"] == json!(["found", "not_found", "unknown"]))
+            );
+        }
     }
 
     #[test]

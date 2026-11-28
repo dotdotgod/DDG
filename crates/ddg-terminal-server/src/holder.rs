@@ -5,8 +5,11 @@
 use crate::paths::{self, Paths};
 use crate::pty::{self, PtyHandle};
 use ddg_agents_os::ipc::{LocalStream, connect};
+use ddg_agents_proto::BUILTIN_AGENT_PRESET_BINS;
 use ddg_agents_proto::holder as proto;
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsStr;
+use std::fs;
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
@@ -18,6 +21,95 @@ use std::time::{Duration, Instant};
 
 const TAIL_BYTES: usize = 1 << 20;
 const EXIT_DRAIN: Duration = Duration::from_millis(200);
+
+pub(crate) fn unknown_bins() -> proto::HolderProbeBinsResult {
+    proto::HolderProbeBinsResult {
+        items: BUILTIN_AGENT_PRESET_BINS
+            .iter()
+            .map(|bin| proto::HolderBinStatus {
+                bin: (*bin).into(),
+                status: proto::BinProbeStatus::Unknown,
+            })
+            .collect(),
+    }
+}
+
+fn probe_path(path: Option<&OsStr>) -> proto::HolderProbeBinsResult {
+    use proto::BinProbeStatus::*;
+
+    let mut result = unknown_bins();
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return result;
+    };
+    let mut dirs: Vec<_> = std::env::split_paths(path).collect();
+    let count = dirs.len();
+    dirs.retain(|dir| dir.is_absolute());
+    for item in &mut result.items {
+        item.status = if dirs.len() == count {
+            NotFound
+        } else {
+            Unknown
+        };
+        for dir in &dirs {
+            match probe_candidate(dir, &item.bin) {
+                Found => {
+                    item.status = Found;
+                    break;
+                }
+                Unknown => item.status = Unknown,
+                NotFound => {}
+            }
+        }
+    }
+    result
+}
+
+#[cfg(unix)]
+fn probe_candidate(dir: &Path, bin: &str) -> proto::BinProbeStatus {
+    use proto::BinProbeStatus::*;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let candidate = dir.join(bin);
+    if fs::metadata(&candidate).is_ok_and(|meta| meta.is_file())
+        && CString::new(candidate.as_os_str().as_bytes())
+            .is_ok_and(|path| unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 })
+    {
+        Found
+    } else {
+        NotFound
+    }
+}
+
+#[cfg(windows)]
+fn probe_candidate(dir: &Path, bin: &str) -> proto::BinProbeStatus {
+    use proto::BinProbeStatus::*;
+
+    let is_file = |ext| match fs::metadata(dir.join(format!("{bin}.{ext}"))) {
+        Ok(meta) => Ok(meta.is_file()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    };
+    match is_file("exe") {
+        Ok(true) => Found,
+        Err(_) => Unknown,
+        Ok(false)
+            if ["cmd", "bat", "ps1"]
+                .into_iter()
+                .any(|ext| !matches!(is_file(ext), Ok(false))) =>
+        {
+            Unknown
+        }
+        Ok(false) => NotFound,
+    }
+}
 
 struct HeldTerm {
     pid: u32,
@@ -56,11 +148,29 @@ struct HolderState {
     core_left: Instant,
     intentional_leave: bool,
     restarts: Vec<Instant>,
+    probe_running: bool,
+}
+
+impl HolderState {
+    fn disconnect_deadline(&self, grace: Duration) -> Option<Instant> {
+        if self.core.is_some() {
+            return None;
+        }
+        let grace = if self.intentional_leave {
+            Duration::from_secs(60)
+        } else if self.generation == 0 {
+            grace.max(Duration::from_secs(5))
+        } else {
+            grace
+        };
+        Some(self.core_left + grace)
+    }
 }
 
 struct Holder {
     state: Mutex<HolderState>,
     changed: Condvar,
+    core_changed: Condvar,
     instance: String,
     grace: Duration,
     bin_path: PathBuf,
@@ -127,8 +237,10 @@ pub fn run(socket: PathBuf, bin_path: PathBuf) -> io::Result<()> {
             core_left: Instant::now(),
             intentional_leave: false,
             restarts: Vec::new(),
+            probe_running: false,
         }),
         changed: Condvar::new(),
+        core_changed: Condvar::new(),
         instance: paths::random_hex(),
         grace: grace.clamp(Duration::from_millis(1), Duration::from_secs(60)),
         bin_path,
@@ -152,7 +264,8 @@ pub fn run(socket: PathBuf, bin_path: PathBuf) -> io::Result<()> {
             }
         };
         std::thread::spawn(move || {
-            if let Err(e) = holder.serve(stream) {
+            if let Err(e) = holder.serve(stream, || probe_path(std::env::var_os("PATH").as_deref()))
+            {
                 let _ = writeln!(io::stderr(), "holder: core connection error: {e}");
             }
         });
@@ -179,6 +292,7 @@ impl Holder {
         }
         st.intentional_leave = intentional;
         st.core_left = Instant::now();
+        self.core_changed.notify_one();
     }
 
     fn write_to_core(&self, generation: u64, mut stream: LocalStream, frames: Receiver<Vec<u8>>) {
@@ -193,7 +307,11 @@ impl Holder {
         }
     }
 
-    fn serve(self: &Arc<Self>, mut stream: LocalStream) -> io::Result<()> {
+    fn serve(
+        self: &Arc<Self>,
+        mut stream: LocalStream,
+        probe: impl Fn() -> proto::HolderProbeBinsResult + Clone + Send + 'static,
+    ) -> io::Result<()> {
         let hello = match proto::read_frame(&mut stream)? {
             Some((proto::HELLO, _, payload)) => proto::parse_json::<proto::HolderHello>(&payload)?,
             _ => return Ok(()),
@@ -215,15 +333,16 @@ impl Holder {
             let mut ids: Vec<u32> = st.ptys.keys().copied().collect();
             ids.sort_unstable();
 
+            let mut features = Vec::new();
+            if cfg!(unix) {
+                features.push("fg_pgrp_v1".into());
+            }
+            features.push(proto::FEATURE_PROBE_BINS_V1.into());
             let welcome = proto::HolderWelcome {
                 version: proto::HOLDER_PROTO_VERSION,
                 instance: self.instance.clone(),
                 pid: std::process::id(),
-                features: if cfg!(unix) {
-                    vec!["fg_pgrp_v1".into()]
-                } else {
-                    vec![]
-                },
+                features,
                 ptys: ids
                     .iter()
                     .map(|id| {
@@ -263,10 +382,11 @@ impl Holder {
                 stream: kept_stream,
             });
             Self::send_core(&st, initial);
+            self.core_changed.notify_one();
             generation
         };
 
-        let res = self.commands(&mut stream, generation);
+        let res = self.commands(&mut stream, generation, probe);
         let mut st = self.lock();
         if st.core.as_ref().is_some_and(|c| c.generation == generation) {
             self.core_gone(&mut st, false);
@@ -274,7 +394,53 @@ impl Holder {
         res
     }
 
-    fn commands(self: &Arc<Self>, stream: &mut LocalStream, generation: u64) -> io::Result<()> {
+    fn query_bins(
+        self: &Arc<Self>,
+        generation: u64,
+        request_id: u32,
+        probe: impl FnOnce() -> proto::HolderProbeBinsResult + Send + 'static,
+    ) {
+        let mut st = self.lock();
+        if st.core.as_ref().is_none_or(|c| c.generation != generation) {
+            return;
+        }
+        let reply = move |st: &HolderState, result| {
+            Self::send_core(
+                st,
+                proto::encode_json(proto::BINS_RESULT, request_id, &result),
+            );
+        };
+        if st.probe_running {
+            reply(&st, unknown_bins());
+            return;
+        }
+
+        st.probe_running = true;
+        let holder = self.clone();
+        if std::thread::Builder::new()
+            .name("holder-probe-bins".into())
+            .spawn(move || {
+                let result = probe();
+                let mut st = holder.lock();
+                st.probe_running = false;
+                // Request IDs belong to the Core connection that issued them.
+                if st.core.as_ref().is_some_and(|c| c.generation == generation) {
+                    reply(&st, result);
+                }
+            })
+            .is_err()
+        {
+            st.probe_running = false;
+            reply(&st, unknown_bins());
+        }
+    }
+
+    fn commands(
+        self: &Arc<Self>,
+        stream: &mut LocalStream,
+        generation: u64,
+        probe: impl Fn() -> proto::HolderProbeBinsResult + Clone + Send + 'static,
+    ) -> io::Result<()> {
         while let Some((kind, pty_id, payload)) = proto::read_frame(stream)? {
             match kind {
                 proto::SPAWN => {
@@ -303,10 +469,14 @@ impl Holder {
                     }
                 }
                 proto::RELEASE => {
-                    if let Some(t) = self.lock().ptys.remove(&pty_id)
+                    let mut st = self.lock();
+                    if let Some(t) = st.ptys.remove(&pty_id)
                         && t.exit.is_none()
                     {
                         t.pty.signal_process_group(t.pid, pty::HANGUP);
+                        if st.core.is_none() {
+                            self.core_changed.notify_one();
+                        }
                     }
                 }
                 proto::QUERY_FG_PGRP => {
@@ -336,6 +506,10 @@ impl Holder {
                             &proto::HolderFgPgrpBatch { entries },
                         ),
                     );
+                }
+                proto::QUERY_BINS => {
+                    let _: proto::HolderProbeBins = proto::parse_json(&payload)?;
+                    self.query_bins(generation, pty_id, probe.clone());
                 }
                 proto::GOODBYE => {
                     let mode: proto::HolderGoodbye = proto::parse_json(&payload)?;
@@ -472,43 +646,61 @@ impl Holder {
             t.exit = Some(exit);
             let frame = proto::encode_json(proto::EXITED, pty_id, &exit);
             Self::send_core(&st, frame);
+            if st.core.is_none() {
+                self.core_changed.notify_one();
+            }
         }
     }
 
+    fn wait_for_core_change_until<'a>(
+        &self,
+        st: MutexGuard<'a, HolderState>,
+        deadline: Instant,
+    ) -> MutexGuard<'a, HolderState> {
+        self.core_changed
+            .wait_timeout(st, deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|p| p.into_inner())
+            .0
+    }
+
     fn supervise(&self) {
+        let start_lock = self.paths.state_dir.join("terminal-start.lock");
+        let mut st = self.lock();
         loop {
-            std::thread::sleep(self.grace.min(Duration::from_millis(50)));
-            let mut st = self.lock();
-            let grace = if st.intentional_leave {
-                Duration::from_secs(60)
-            } else if st.generation == 0 {
-                self.grace.max(Duration::from_secs(5))
-            } else {
-                self.grace
+            let Some(deadline) = st.disconnect_deadline(self.grace) else {
+                st = self
+                    .core_changed
+                    .wait(st)
+                    .unwrap_or_else(|p| p.into_inner());
+                continue;
             };
-            if st.core.is_some() || st.core_left.elapsed() < grace {
+            let now = Instant::now();
+            if now < deadline {
+                st = self.wait_for_core_change_until(st, deadline);
                 continue;
             }
-            let has_live = st.ptys.values().any(|t| t.exit.is_none());
-            if !has_live {
+            if !st.ptys.values().any(|t| t.exit.is_none()) {
                 #[cfg(unix)]
                 paths::remove_if_exists(&self.socket);
                 std::process::exit(0);
             }
-            let now = Instant::now();
-            st.restarts
-                .retain(|t| now.duration_since(*t) < Duration::from_secs(300));
-            let backoff = self.grace * 2u32.pow(st.restarts.len().min(5) as u32);
-            if st
-                .restarts
-                .last()
-                .is_some_and(|t| now.duration_since(*t) < backoff.min(Duration::from_secs(30)))
+            let history = Duration::from_secs(300);
+            st.restarts.retain(|t| now.duration_since(*t) < history);
+            let backoff = (self.grace * 2u32.pow(st.restarts.len().min(5) as u32))
+                .min(Duration::from_secs(30));
+            if let Some((first, last)) = st.restarts.first().zip(st.restarts.last())
+                && now < *last + backoff
             {
+                let retry = (*last + backoff).min(*first + history);
+                st = self.wait_for_core_change_until(st, retry);
                 continue;
             }
-            let Ok(_start) = ddg_agents_os::lock::FileLock::try_lock_exclusive(
-                &self.paths.state_dir.join("terminal-start.lock"),
-            ) else {
+            let Ok(start) = ddg_agents_os::lock::FileLock::try_lock_exclusive(&start_lock) else {
+                // Another process owns startup; the file lock has no notification channel.
+                st = self.wait_for_core_change_until(
+                    st,
+                    now + self.grace.min(Duration::from_millis(50)),
+                );
                 continue;
             };
             st.restarts.push(now);
@@ -522,14 +714,144 @@ impl Holder {
             ) {
                 let _ = writeln!(io::stderr(), "holder: failed to restart core: {e}");
             }
+            drop(start);
+            st = self.lock();
         }
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn ut_term_01_windows_exe_and_shims() {
+    use proto::BinProbeStatus::*;
+
+    let dir = std::env::temp_dir().join(format!("ddg-probe-{}", paths::random_hex()));
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("pi.exe"), b"").unwrap();
+    std::fs::write(dir.join("agy.cmd"), b"").unwrap();
+    std::fs::write(dir.join("codex.bat"), b"").unwrap();
+    std::fs::write(dir.join("opencode.ps1"), b"").unwrap();
+    std::fs::create_dir(dir.join("claude.exe")).unwrap();
+    let result = probe_path(Some(dir.as_os_str()));
+    let relative = std::env::join_paths([dir.as_path(), Path::new(".")]).unwrap();
+    let relative = probe_path(Some(&relative));
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        result
+            .items
+            .iter()
+            .map(|item| item.status)
+            .collect::<Vec<_>>(),
+        [Found, Unknown, Unknown, Unknown, NotFound]
+    );
+    assert_eq!(relative.items.last().unwrap().status, Unknown);
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn ut_term_01_unix_path_metadata_and_permissions() {
+        use proto::BinProbeStatus::*;
+        use std::ffi::OsStr;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = std::env::temp_dir().join(format!("ddg-probe-{}", paths::random_hex()));
+        std::fs::create_dir(&dir).unwrap();
+        let marker = dir.join("executed");
+        let pi = dir.join("pi");
+        std::fs::write(&pi, format!("#!/bin/sh\n: > '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let agy = dir.join("agy");
+        std::fs::write(&agy, b"").unwrap();
+        std::fs::set_permissions(&agy, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir(dir.join("codex")).unwrap();
+        symlink(dir.join("missing"), dir.join("opencode")).unwrap();
+        symlink(&pi, dir.join("claude")).unwrap();
+
+        let inspect = |path| {
+            probe_path(path)
+                .items
+                .into_iter()
+                .map(|item| item.status)
+                .collect::<Vec<_>>()
+        };
+        let statuses = inspect(Some(dir.as_os_str()));
+        let relative = std::env::join_paths([dir.as_path(), Path::new(".")]).unwrap();
+        let empty_element = std::env::join_paths([dir.as_path(), Path::new("")]).unwrap();
+        assert_eq!(statuses, [Found, NotFound, NotFound, NotFound, Found]);
+        for path in [&relative, &empty_element] {
+            assert_eq!(
+                inspect(Some(path)),
+                [Found, Unknown, Unknown, Unknown, Found]
+            );
+        }
+        assert_eq!(inspect(None), [Unknown; 5]);
+        assert_eq!(inspect(Some(OsStr::new(""))), [Unknown; 5]);
+        let executed = marker.exists();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(!executed);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ut_term_01_execute_bit_does_not_override_acl() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ddg-probe-{}", paths::random_hex()));
+        fs::create_dir(&dir).unwrap();
+        let pi = dir.join("pi");
+        fs::write(&pi, b"").unwrap();
+        fs::set_permissions(&pi, fs::Permissions::from_mode(0o700)).unwrap();
+        let user = Command::new("/usr/bin/id").arg("-un").output().unwrap();
+        assert!(user.status.success());
+        let user = std::str::from_utf8(&user.stdout).unwrap().trim_end();
+        let acl = Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{user} deny execute")])
+            .arg(&pi)
+            .status()
+            .unwrap();
+        let status = probe_candidate(&dir, "pi");
+        fs::remove_dir_all(dir).unwrap();
+        assert!(acl.success());
+        assert_eq!(status, proto::BinProbeStatus::NotFound);
+    }
+
+    #[test]
+    fn supervision_arms_deadlines_only_while_disconnected() {
+        let left = Instant::now();
+        let grace = Duration::from_millis(100);
+        let mut st = HolderState {
+            ptys: HashMap::new(),
+            core: None,
+            generation: 0,
+            core_left: left,
+            intentional_leave: false,
+            restarts: Vec::new(),
+            probe_running: false,
+        };
+        assert_eq!(
+            st.disconnect_deadline(grace),
+            Some(left + Duration::from_secs(5))
+        );
+        st.generation = 1;
+        let (stream, _peer) = LocalStream::pair().unwrap();
+        st.core = Some(CoreConn {
+            generation: 1,
+            frames: mpsc::channel().0,
+            stream,
+        });
+        assert_eq!(st.disconnect_deadline(grace), None);
+        st.core = None;
+        assert_eq!(st.disconnect_deadline(grace), Some(left + grace));
+        st.intentional_leave = true;
+        assert_eq!(
+            st.disconnect_deadline(grace),
+            Some(left + Duration::from_secs(60))
+        );
+    }
 
     #[test]
     fn foreground_group_frames_for_live_exited_and_missing_pty() {
@@ -545,15 +867,28 @@ mod tests {
                 core_left: Instant::now(),
                 intentional_leave: false,
                 restarts: Vec::new(),
+                probe_running: false,
             }),
             changed: Condvar::new(),
+            core_changed: Condvar::new(),
             instance: "test".into(),
             grace: Duration::ZERO,
             bin_path: PathBuf::new(),
             paths: Paths::from_env().unwrap(),
             socket: PathBuf::new(),
         });
-        let service = std::thread::spawn(move || holder.serve(stream).unwrap());
+        let (started, running) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let blocked = Arc::new(Mutex::new(blocked));
+        let service = std::thread::spawn(move || {
+            holder
+                .serve(stream, move || {
+                    started.send(()).unwrap();
+                    blocked.lock().unwrap().recv().unwrap();
+                    unknown_bins()
+                })
+                .unwrap()
+        });
         client
             .write_all(&proto::encode_json(
                 proto::HELLO,
@@ -569,7 +904,7 @@ mod tests {
             proto::parse_json::<proto::HolderWelcome>(&payload)
                 .unwrap()
                 .features,
-            ["fg_pgrp_v1"]
+            ["fg_pgrp_v1", proto::FEATURE_PROBE_BINS_V1]
         );
 
         let id = 3;
@@ -624,6 +959,26 @@ mod tests {
             }]
         );
 
+        let query_bins = |client: &mut LocalStream, id| {
+            client
+                .write_all(&proto::encode_json(
+                    proto::QUERY_BINS,
+                    id,
+                    &proto::HolderProbeBins {},
+                ))
+                .unwrap();
+        };
+        query_bins(&mut client, 99);
+        running.recv_timeout(Duration::from_secs(5)).unwrap();
+        query_bins(&mut client, 100);
+        let (kind, request_id, payload) = proto::read_frame(&mut client).unwrap().unwrap();
+        assert_eq!((kind, request_id), (proto::BINS_RESULT, 100));
+        assert_eq!(
+            proto::parse_json::<proto::HolderProbeBinsResult>(&payload).unwrap(),
+            unknown_bins()
+        );
+        assert!(running.try_recv().is_err());
+
         client
             .write_all(&proto::encode_frame(proto::INPUT, id, b"\n"))
             .unwrap();
@@ -642,6 +997,9 @@ mod tests {
                 pgrp: None
             }]
         );
+        release.send(()).unwrap();
+        let (kind, request_id, _) = proto::read_frame(&mut client).unwrap().unwrap();
+        assert_eq!((kind, request_id), (proto::BINS_RESULT, 99));
         drop(client);
         service.join().unwrap();
     }

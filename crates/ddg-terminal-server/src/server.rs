@@ -10,7 +10,7 @@ use ddg_agents_proto::frame::{
 use ddg_agents_proto::rpc::{ErrorKind, Request, Response, RpcError};
 use ddg_agents_proto::terminal::{
     HelloParams, HelloResult, PROTOCOL_VERSION, PingResult, PtyAttachParams, PtyClaimControlParams,
-    PtyKillParams, PtyListResult, PtyReleaseControlParams, PtySpawnParams,
+    PtyKillParams, PtyListResult, PtyProbeBinsParams, PtyReleaseControlParams, PtySpawnParams,
     SessionInboxSubscribeParams, SessionReadScreenParams, SessionRecvParams, SessionSendParams,
     SessionWriteInputParams,
 };
@@ -382,6 +382,21 @@ async fn dispatch_json(
         "pty.list" => Ok(json!(PtyListResult {
             ptys: core.list_ptys(),
         })),
+        "pty.probe_bins" => match serde_json::from_value::<PtyProbeBinsParams>(req.params) {
+            Ok(_) => {
+                let disconnected = conn.disconnected.notified();
+                let result = if conn.gone.load(Ordering::SeqCst) {
+                    crate::holder::unknown_bins()
+                } else {
+                    tokio::select! {
+                        result = core.probe_bins() => result,
+                        _ = disconnected => crate::holder::unknown_bins(),
+                    }
+                };
+                Ok(json!(result))
+            }
+            Err(e) => Err(RpcError::invalid_params(e.to_string())),
+        },
         "pty.subscribe" => {
             if !is_framed {
                 Err(RpcError::invalid_params(

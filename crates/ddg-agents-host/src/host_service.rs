@@ -17,6 +17,7 @@ use ddg_agents_proto::id::{
 };
 use ddg_agents_proto::rpc::{ErrorKind, Notification, RpcError};
 use ddg_agents_proto::terminal::*;
+use ddg_agents_transport::presets::BUILTIN_AGENT_PRESETS;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -109,6 +110,7 @@ impl Guard<'_> {
 
 struct HostState {
     catalog: Catalog,
+    catalog_save_pending: bool,
     activities: HashMap<TabId, TabActivity>,
     seq: u64,
     reset_notice: Option<ResetNotice>,
@@ -224,6 +226,7 @@ impl HostService {
             relay,
             state: Mutex::new(HostState {
                 catalog,
+                catalog_save_pending: false,
                 activities: HashMap::new(),
                 seq: 0,
                 reset_notice,
@@ -353,13 +356,32 @@ impl HostService {
         }
     }
 
+    pub async fn detect_agent_presets(&self) -> HostAgentPresetsDetectResult {
+        let probed = match self.term() {
+            Ok(term) => term.probe_bins().await,
+            Err(_) => None,
+        };
+        HostAgentPresetsDetectResult {
+            items: BUILTIN_AGENT_PRESETS
+                .iter()
+                .map(|preset| AgentPresetDetection {
+                    id: preset.id.into(),
+                    status: probed
+                        .as_ref()
+                        .and_then(|result| {
+                            result
+                                .items
+                                .iter()
+                                .find(|item| item.bin == preset.detect_bin)
+                        })
+                        .map_or(PresetDetectStatus::Unknown, |item| item.status),
+                })
+                .collect(),
+        }
+    }
+
     pub fn flush_catalog(&self) -> io::Result<()> {
-        let st = self.lock();
-        save_catalog(
-            &self.paths.catalog_file,
-            &st.catalog,
-            st.reset_notice.as_ref(),
-        )
+        self.save_observed(&mut self.lock())
     }
 
     pub fn token_snapshot(&self) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
@@ -383,23 +405,38 @@ impl HostService {
         save_catalog(&self.paths.catalog_file, &catalog, st.reset_notice.as_ref())
             .map_err(internal)?;
         st.catalog = catalog;
+        st.catalog_save_pending = false;
         self.catalog_changed(st);
         Ok(())
     }
 
-    // Exit/recovery is irreversible even if disk I/O fails; keep the live snapshot truthful.
-    fn publish_observed(&self, st: &mut HostState) -> Result<(), RpcError> {
+    fn save_observed(&self, st: &mut HostState) -> io::Result<()> {
         let result = save_catalog(
             &self.paths.catalog_file,
             &st.catalog,
             st.reset_notice.as_ref(),
-        )
-        .map_err(internal);
-        if result.is_err() {
+        );
+        st.catalog_save_pending = result.is_err();
+        if st.catalog_save_pending {
             self.audit("catalog_save_failed", "");
         }
+        result
+    }
+
+    // Exit/recovery is irreversible even if disk I/O fails; keep the live snapshot truthful.
+    fn publish_observed(&self, st: &mut HostState) -> Result<(), RpcError> {
+        let result = self.save_observed(st).map_err(internal);
         self.catalog_changed(st);
         result
+    }
+
+    fn publish_observed_if_changed(&self, st: &mut HostState, changed: bool) {
+        if changed {
+            let _ = self.publish_observed(st);
+        } else if st.catalog_save_pending {
+            // The live change was already broadcast; only durability needs a retry.
+            let _ = self.save_observed(st);
+        }
     }
 
     fn catalog_changed(&self, st: &mut HostState) {
@@ -540,10 +577,11 @@ impl HostService {
         let mut catalog = st.catalog.clone();
         reconcile_with_live_ptys(&mut catalog, ptys);
         st.tokens.reconcile_with_live_ptys(ptys);
-        if catalog != st.catalog {
+        let changed = catalog != st.catalog;
+        if changed {
             st.catalog = catalog;
-            let _ = self.publish_observed(st);
         }
+        self.publish_observed_if_changed(st, changed);
         Self::restore_activities(st, ptys);
     }
 
@@ -721,17 +759,28 @@ impl HostService {
                 Self::activity_changed(&mut st, &room_id, &session_id);
             }
             PtyEvent::CwdChanged { cwd, .. } => {
+                // The decoded path is used for spawning, not just display. Only sanitize its label.
+                let path_changed = tab.last_cwd.as_deref() != Some(cwd.as_str());
+                let mut name_changed = false;
                 if t == 0
                     && let Some(base) = folder_basename(&cwd)
+                    && room.auto_name != base
                 {
                     room.auto_name = base;
+                    name_changed = true;
                 }
-                tab.last_cwd = Some(cwd);
-                let _ = self.publish_observed(&mut st);
+                if path_changed {
+                    tab.last_cwd = Some(cwd);
+                }
+                self.publish_observed_if_changed(&mut st, path_changed || name_changed);
             }
             PtyEvent::TitleChanged { title, .. } => {
-                tab.title = sanitize_display_text(&title, 160);
-                let _ = self.publish_observed(&mut st);
+                let title = sanitize_display_text(&title, 160);
+                let changed = tab.title != title;
+                if changed {
+                    tab.title = title;
+                }
+                self.publish_observed_if_changed(&mut st, changed);
             }
             PtyEvent::ControlChanged { controller, .. } => {
                 st.clients.retain(|client| {
@@ -1941,10 +1990,22 @@ fn ensure_current_term(st: &HostState, term: &Arc<TermConn>) -> Result<(), RpcEr
 
 fn exit_status(result: &PtyKillResult) -> String {
     match (result.exit_code, result.signal) {
-        (Some(0), None) => "정상 종료".into(),
-        (Some(code), _) => format!("종료 코드 {code}"),
-        (None, Some(sig)) => format!("시그널 {sig}로 종료"),
-        (None, None) => "종료됨".into(),
+        (Some(0), None) => "Exited cleanly".into(),
+        (Some(code), _) => format!("Exit code {code}"),
+        (None, Some(sig)) => format!("Terminated by signal {sig}"),
+        (None, None) => "Exited".into(),
+    }
+}
+
+#[test]
+fn restored_exit_status_describes_code_signal_or_unknown_result() {
+    for (exit_code, signal, expected) in [
+        (Some(0), None, "Exited cleanly"),
+        (Some(7), None, "Exit code 7"),
+        (None, Some(15), "Terminated by signal 15"),
+        (None, None, "Exited"),
+    ] {
+        assert_eq!(exit_status(&PtyKillResult { exit_code, signal }), expected);
     }
 }
 

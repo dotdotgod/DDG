@@ -4,9 +4,11 @@
 
 use crate::AGENT_ACTIVITY_V1;
 use crate::dial::{DialError, DialErrorKind, DialPolicy, FramedTransport, dial, dial_with_policy};
+use crate::presets::BUILTIN_AGENT_PRESETS;
 use crate::profile::HostProfile;
 use ddg_agents_proto::frame::{
-    CONTROL_CHANNEL, FrameKind, HEADER_LEN, MAX_PENDING, decode_header, decode_resize, encode_frame,
+    CONTROL_CHANNEL, DATA_CHUNK, FrameKind, HEADER_LEN, INITIAL_CREDIT, MAX_PENDING, decode_header,
+    decode_resize, encode_frame,
 };
 use ddg_agents_proto::host::{
     Catalog, CatalogSubscribeResult, ExecutorSpec, HostEvent as WireHostEvent, HostHelloResult,
@@ -22,6 +24,10 @@ use ddg_agents_proto::host::{
     TabRestartParams, TabRestartResult, TabScreenParams, TabSplitParams, TabSplitResult,
     TabWriteParams,
 };
+use ddg_agents_proto::host::{
+    AgentPresetDetection, FEATURE_AGENT_PRESETS_V1, HostAgentPresetsDetectParams,
+    HostAgentPresetsDetectResult, PresetDetectStatus,
+};
 use ddg_agents_proto::rpc::{ErrorKind, Notification, Request, Response, RpcError};
 use ddg_agents_proto::terminal::{
     AgentStatus, ControlMode, ForegroundHint, PingResult, PtyClaimControlResult,
@@ -30,8 +36,8 @@ use ddg_agents_proto::terminal::{
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot};
@@ -42,6 +48,31 @@ pub use stream::{MessageStreamHandle, RelayStreamHandle, StreamError};
 use stream::{NdjsonStream, StreamIngress, send_close};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(15);
+const PRESET_DETECT_TIMEOUT: Duration = Duration::from_secs(4);
+const MAX_PRESET_DETECTION_ITEMS: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresetDetectOutcome {
+    Unsupported,
+    Detected(Vec<AgentPresetDetection>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresetDetectError {
+    Rpc(RpcError),
+    Protocol(String),
+}
+
+impl std::fmt::Display for PresetDetectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rpc(error) => f.write_str(&error.message),
+            Self::Protocol(message) => write!(f, "invalid preset detection response: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for PresetDetectError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -130,6 +161,13 @@ pub enum HostEvent {
         channel: u32,
         bytes: Vec<u8>,
     },
+    /// Keep `credit` while buffering these bytes; drop it after consuming or discarding them.
+    DeferredStreamData {
+        tab_id: TabId,
+        channel: u32,
+        bytes: Vec<u8>,
+        credit: TabCredit,
+    },
     StreamResize {
         tab_id: TabId,
         channel: u32,
@@ -175,8 +213,70 @@ enum ChannelKind {
         line: Vec<u8>,
         events: broadcast::Sender<CatalogChange>,
     },
-    TabStream(TabId),
+    TabStream {
+        tab_id: TabId,
+        credit: Option<TabCreditWindow>,
+    },
     Ndjson(StreamIngress),
+}
+
+struct TabCreditWindow {
+    registration: Arc<()>,
+    available: usize,
+}
+
+/// A DATA receipt bound to one connection and one tab registration. Clones share
+/// the receipt; the last drop releases any bytes not explicitly granted.
+#[derive(Clone, Debug)]
+pub struct TabCredit(Arc<TabCreditReceipt>);
+
+#[derive(Debug)]
+struct TabCreditReceipt {
+    conn: Weak<ActiveConn>,
+    registration: Arc<()>,
+    channel: u32,
+    remaining: AtomicU32,
+}
+
+impl TabCreditReceipt {
+    fn grant(&self, bytes: u32) -> bool {
+        if bytes == 0 {
+            return true;
+        }
+        let Some(conn) = self.conn.upgrade() else {
+            return false;
+        };
+        let mut channels = conn.channels.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(ChannelKind::TabStream {
+            credit: Some(window),
+            ..
+        }) = channels.get_mut(&self.channel)
+        else {
+            return false;
+        };
+        let remaining = self.remaining.load(Ordering::Relaxed);
+        if !Arc::ptr_eq(&window.registration, &self.registration) || bytes > remaining {
+            return false;
+        }
+        if !send_credit(&conn.tx, self.channel, bytes) {
+            return false;
+        }
+        self.remaining.store(remaining - bytes, Ordering::Relaxed);
+        window.available += bytes as usize;
+        true
+    }
+}
+
+impl Drop for TabCreditReceipt {
+    fn drop(&mut self) {
+        let bytes = *self.remaining.get_mut();
+        self.grant(bytes);
+    }
+}
+
+fn send_credit(tx: &mpsc::UnboundedSender<Vec<u8>>, channel: u32, bytes: u32) -> bool {
+    encode_frame(channel, FrameKind::Credit, &bytes.to_le_bytes())
+        .is_ok_and(|frame| tx.send(frame).is_ok())
 }
 
 enum PendingAttach {
@@ -187,6 +287,20 @@ enum PendingAttach {
 }
 
 type PendingCalls = Mutex<HashMap<u64, (oneshot::Sender<Response>, PendingAttach)>>;
+
+struct PendingCallGuard {
+    pending: Arc<PendingCalls>,
+    id: u64,
+}
+
+impl Drop for PendingCallGuard {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.id);
+    }
+}
 
 struct ActiveConn {
     hello: HostHelloResult,
@@ -208,6 +322,7 @@ pub struct HostClient {
     active: Mutex<Option<Arc<ActiveConn>>>,
     state: Mutex<ConnectionState>,
     closed: AtomicBool,
+    deferred_tab_credit: bool,
     event_tx: mpsc::UnboundedSender<HostEvent>,
 }
 
@@ -226,6 +341,23 @@ impl HostClient {
         client_id: impl Into<String>,
         policy: DialPolicy,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<HostEvent>), DialError> {
+        Self::connect_once_inner(profile, client_id, policy, false).await
+    }
+
+    /// Connects once with tab DATA credit tied to the lifetime of each DATA receipt.
+    pub async fn connect_once_with_deferred_tab_credit(
+        profile: HostProfile,
+        client_id: impl Into<String>,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<HostEvent>), DialError> {
+        Self::connect_once_inner(profile, client_id, DialPolicy::Standard, true).await
+    }
+
+    async fn connect_once_inner(
+        profile: HostProfile,
+        client_id: impl Into<String>,
+        policy: DialPolicy,
+        deferred_tab_credit: bool,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<HostEvent>), DialError> {
         let client_id = client_id.into();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let transport = dial_with_policy(&profile, &client_id, policy).await?;
@@ -234,6 +366,7 @@ impl HostClient {
             active: Mutex::new(None),
             state: Mutex::new(ConnectionState::Connecting),
             closed: AtomicBool::new(false),
+            deferred_tab_credit,
             event_tx,
         });
         let done_rx = client.install_transport(transport);
@@ -253,6 +386,22 @@ impl HostClient {
         profile: HostProfile,
         client_id: impl Into<String>,
     ) -> (Arc<Self>, mpsc::UnboundedReceiver<HostEvent>) {
+        Self::start_managed_inner(profile, client_id, false)
+    }
+
+    /// Starts a managed client with tab DATA credit tied to each DATA receipt.
+    pub fn start_managed_with_deferred_tab_credit(
+        profile: HostProfile,
+        client_id: impl Into<String>,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<HostEvent>) {
+        Self::start_managed_inner(profile, client_id, true)
+    }
+
+    fn start_managed_inner(
+        profile: HostProfile,
+        client_id: impl Into<String>,
+        deferred_tab_credit: bool,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<HostEvent>) {
         let client_id = client_id.into();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let client = Arc::new(Self {
@@ -260,6 +409,7 @@ impl HostClient {
             active: Mutex::new(None),
             state: Mutex::new(ConnectionState::Connecting),
             closed: AtomicBool::new(false),
+            deferred_tab_credit,
             event_tx,
         });
         let c = client.clone();
@@ -358,6 +508,60 @@ impl HostClient {
             .is_some_and(|conn| conn.supports_feature(name))
     }
 
+    pub fn supports_agent_presets(&self) -> bool {
+        self.supports_feature(FEATURE_AGENT_PRESETS_V1)
+    }
+
+    /// Probe the current host once; never retry on a replacement connection.
+    pub async fn detect_agent_presets(&self) -> Result<PresetDetectOutcome, PresetDetectError> {
+        let conn = self.require_connection().map_err(PresetDetectError::Rpc)?;
+        if !conn.supports_feature(FEATURE_AGENT_PRESETS_V1) {
+            return Ok(PresetDetectOutcome::Unsupported);
+        }
+        let (conn, value) = Self::call_on(
+            conn,
+            "host.agent_presets_detect",
+            json!(HostAgentPresetsDetectParams {}),
+            PendingAttach::None,
+            PRESET_DETECT_TIMEOUT,
+        )
+        .await
+        .map_err(PresetDetectError::Rpc)?;
+        if !self
+            .connection()
+            .is_some_and(|active| Arc::ptr_eq(&active, &conn))
+        {
+            return Err(PresetDetectError::Rpc(RpcError::new(
+                ErrorKind::Unavailable,
+                "host connection changed during preset detection",
+                None,
+            )));
+        }
+
+        let response: HostAgentPresetsDetectResult = serde_json::from_value(value)
+            .map_err(|error| PresetDetectError::Protocol(error.to_string()))?;
+        if response.items.len() > MAX_PRESET_DETECTION_ITEMS {
+            return Err(PresetDetectError::Protocol("too many items".into()));
+        }
+        let mut statuses = HashMap::with_capacity(response.items.len());
+        for item in response.items {
+            if statuses.insert(item.id, item.status).is_some() {
+                return Err(PresetDetectError::Protocol("duplicate preset ID".into()));
+            }
+        }
+        Ok(PresetDetectOutcome::Detected(
+            BUILTIN_AGENT_PRESETS
+                .iter()
+                .map(|preset| AgentPresetDetection {
+                    id: preset.id.into(),
+                    status: statuses
+                        .remove(preset.id)
+                        .unwrap_or(PresetDetectStatus::Unknown),
+                })
+                .collect(),
+        ))
+    }
+
     fn connection(&self) -> Option<Arc<ActiveConn>> {
         self.active
             .lock()
@@ -426,6 +630,8 @@ impl HostClient {
             next_id: AtomicU64::new(2),
             shutdown: shutdown.clone(),
         });
+        let conn = Arc::downgrade(&active);
+        let deferred_tab_credit = self.deferred_tab_credit;
         *self.active.lock().unwrap_or_else(|p| p.into_inner()) = Some(active);
         self.set_state(ConnectionState::Connected {
             host_id: hello.host_id,
@@ -485,6 +691,7 @@ impl HostClient {
                                             resp.result.as_ref(),
                                             &mut ch_map,
                                             &event_tx,
+                                            deferred_tab_credit,
                                         ) {
                                             Ok(ch) => ch,
                                             Err(err) => {
@@ -520,12 +727,47 @@ impl HostClient {
                             }
                             continue;
                         }
-                        Some(_) if kind == FrameKind::Data && !payload.is_empty() => {
-                            // Existing tab and catalog streams consume bytes on the reader.
-                            let credit = (payload.len() as u32).to_le_bytes();
-                            if let Ok(frame) = encode_frame(channel, FrameKind::Credit, &credit) {
-                                let _ = tx.send(frame);
+                        Some(ChannelKind::TabStream {
+                            tab_id,
+                            credit: Some(window),
+                        }) if kind == FrameKind::Data => {
+                            let Some(available) = window.available.checked_sub(payload.len())
+                            else {
+                                break "tab DATA exceeded receive credit".into();
+                            };
+                            window.available = available;
+                            let registration = window.registration.clone();
+                            let tab_id = tab_id.clone();
+                            // Failed sends drop receipts, which also lock the channel map.
+                            drop(ch_guard);
+                            let send = |bytes: Vec<u8>| {
+                                let credit = TabCredit(Arc::new(TabCreditReceipt {
+                                    conn: conn.clone(),
+                                    channel,
+                                    registration: registration.clone(),
+                                    remaining: AtomicU32::new(bytes.len() as u32),
+                                }));
+                                event_tx
+                                    .send(HostEvent::DeferredStreamData {
+                                        tab_id: tab_id.clone(),
+                                        channel,
+                                        bytes,
+                                        credit,
+                                    })
+                                    .is_ok()
+                            };
+                            let sent = if payload.len() <= DATA_CHUNK {
+                                payload.is_empty() || send(payload)
+                            } else {
+                                payload.chunks(DATA_CHUNK).all(|bytes| send(bytes.to_vec()))
+                            };
+                            if !sent {
+                                break "tab DATA consumer closed".into();
                             }
+                            continue;
+                        }
+                        Some(_) if kind == FrameKind::Data && !payload.is_empty() => {
+                            send_credit(&tx, channel, payload.len() as u32);
                         }
                         _ => {}
                     }
@@ -566,7 +808,7 @@ impl HostClient {
                             }
                             _ => {}
                         },
-                        Some(ChannelKind::TabStream(tab_id)) => {
+                        Some(ChannelKind::TabStream { tab_id, .. }) => {
                             let tab_id = tab_id.clone();
                             match kind {
                                 FrameKind::Data => {
@@ -614,6 +856,12 @@ impl HostClient {
         });
 
         done_rx
+    }
+
+    /// Explicitly grants consumed or discarded bytes, up to the receipt's remaining bytes.
+    /// A numeric channel alone cannot identify a stream across detach or reconnect.
+    pub fn grant_tab_credit(channel: &TabCredit, bytes: u32) -> bool {
+        channel.0.grant(bytes)
     }
 
     /// Sends raw terminal input bytes on an attached channel.
@@ -701,6 +949,11 @@ impl HostClient {
         let frame = encode_frame(CONTROL_CHANNEL, FrameKind::Data, &bytes)
             .map_err(|e| RpcError::new(ErrorKind::Internal, e, None))?;
         let (tx, rx) = oneshot::channel();
+        // Stream replies need their attachment long enough to close canceled channels.
+        let _guard = matches!(attach, PendingAttach::None).then(|| PendingCallGuard {
+            pending: conn.pending.clone(),
+            id,
+        });
         conn.pending
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -1162,6 +1415,7 @@ impl PendingAttach {
         value: Option<&Value>,
         channels: &mut HashMap<u32, ChannelKind>,
         events: &mpsc::UnboundedSender<HostEvent>,
+        deferred_tab_credit: bool,
     ) -> Result<Option<u32>, RpcError> {
         if matches!(self, Self::None) {
             return Ok(None);
@@ -1207,7 +1461,13 @@ impl PendingAttach {
             Self::TabStream(tab_id) => {
                 TabAttachResult::deserialize(result)
                     .map_err(|e| RpcError::new(ErrorKind::Internal, e.to_string(), None))?;
-                ChannelKind::TabStream(tab_id)
+                ChannelKind::TabStream {
+                    tab_id,
+                    credit: deferred_tab_credit.then(|| TabCreditWindow {
+                        registration: Arc::new(()),
+                        available: INITIAL_CREDIT,
+                    }),
+                }
             }
             Self::Ndjson(stream) => ChannelKind::Ndjson(stream),
         };
@@ -1356,16 +1616,43 @@ mod tests {
         mpsc::UnboundedReceiver<HostEvent>,
         DuplexStream,
     ) {
-        let (client_io, peer) = duplex(32 * 1024);
-        let (reader, writer) = split(client_io);
+        mock_client_with_options(features, false)
+    }
+
+    fn mock_client_with_options(
+        features: Vec<String>,
+        deferred_tab_credit: bool,
+    ) -> (
+        Arc<HostClient>,
+        mpsc::UnboundedReceiver<HostEvent>,
+        DuplexStream,
+    ) {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let client = Arc::new(HostClient {
             profile: HostProfile::local_default(),
             active: Mutex::new(None),
             state: Mutex::new(ConnectionState::Connecting),
             closed: AtomicBool::new(false),
+            deferred_tab_credit,
             event_tx,
         });
+        let peer = install_mock_connection(&client, features);
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            HostEvent::StateChanged(ConnectionState::Connected { .. })
+        ));
+        assert!(
+            matches!(events.try_recv().unwrap(), HostEvent::VersionInfo {
+            app_version: Some(app), platform: Some(platform), terminal_server_version: Some(terminal),
+            holder_protocol_version: Some(3), active_pty_count: Some(4), rollback_version: Some(rollback),
+        } if app == "1.2.3" && platform == "linux-x86_64" && terminal == "1.2.2" && rollback == "1.2.1")
+        );
+        (client, events, peer)
+    }
+
+    fn install_mock_connection(client: &Arc<HostClient>, features: Vec<String>) -> DuplexStream {
+        let (client_io, peer) = duplex(32 * 1024);
+        let (reader, writer) = split(client_io);
         let _done = client.install_transport(FramedTransport {
             hello: HostHelloResult {
                 protocol_version: 1,
@@ -1384,17 +1671,7 @@ mod tests {
             writer: Box::new(writer),
             guard: TransportGuard::default(),
         });
-        assert!(matches!(
-            events.try_recv().unwrap(),
-            HostEvent::StateChanged(ConnectionState::Connected { .. })
-        ));
-        assert!(
-            matches!(events.try_recv().unwrap(), HostEvent::VersionInfo {
-            app_version: Some(app), platform: Some(platform), terminal_server_version: Some(terminal),
-            holder_protocol_version: Some(3), active_pty_count: Some(4), rollback_version: Some(rollback),
-        } if app == "1.2.3" && platform == "linux-x86_64" && terminal == "1.2.2" && rollback == "1.2.1")
-        );
-        (client, events, peer)
+        peer
     }
 
     async fn read_frame(peer: &mut DuplexStream) -> Frame {
@@ -1473,6 +1750,7 @@ mod tests {
                 json!({"tab_id": TAB_ID, "pty_id": 7, "mode": "readonly", "control_epoch": 2}),
             )
             .await;
+            assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 5));
         });
         let room = client
             .room_rename(ROOM_ID.into(), Some("new".into()))
@@ -1493,6 +1771,249 @@ mod tests {
             matches!(event(&mut events).await, HostEvent::TabControlChanged { tab_id, pty_id: 7, mode: ControlMode::Readonly, control_epoch: 2 } if tab_id == TAB_ID)
         );
         serve.await.unwrap();
+    }
+
+    async fn mock_attach(client: &HostClient, peer: &mut DuplexStream) {
+        let (attached, _) = tokio::join!(
+            client.tab_attach(TAB_ID.into(), true, 80, 24, 0),
+            rpc_reply(
+                peer,
+                "host.tab_attach",
+                json!({"tab_id": TAB_ID, "want_control": true, "cols": 80, "rows": 24, "history_lines": 0}),
+                json!({"channel": 3, "run_generation": 8, "mode": "control", "control_epoch": 1, "cols": 80, "rows": 24, "runtime": {"state": "running", "pty_id": 7, "pid": 8}})
+            ),
+        );
+        assert_eq!(attached.unwrap().channel, 3);
+    }
+
+    #[tokio::test]
+    async fn deferred_credit_splits_oversized_data_and_cannot_cross_registrations() {
+        let (client, mut events, mut peer) = mock_client_with_options(vec![], true);
+        mock_attach(&client, &mut peer).await;
+        peer.write_all(&Frame::data(3, vec![b'a'; DATA_CHUNK + 7]).encode().unwrap())
+            .await
+            .unwrap();
+        peer.write_all(&Frame::resize(3, 100, 30).encode().unwrap())
+            .await
+            .unwrap();
+        let HostEvent::DeferredStreamData {
+            bytes,
+            credit: stale,
+            ..
+        } = event(&mut events).await
+        else {
+            panic!("expected first DATA chunk");
+        };
+        assert_eq!(bytes, vec![b'a'; DATA_CHUNK]);
+        let HostEvent::DeferredStreamData { bytes, credit, .. } = event(&mut events).await else {
+            panic!("expected last DATA chunk");
+        };
+        assert_eq!(bytes, b"aaaaaaa");
+        assert!(matches!(
+            event(&mut events).await,
+            HostEvent::StreamResize {
+                channel: 3,
+                cols: 100,
+                rows: 30,
+                ..
+            }
+        ));
+        let copy = credit.clone();
+        drop(credit);
+        assert!(!HostClient::grant_tab_credit(&copy, 8));
+        assert!(HostClient::grant_tab_credit(&copy, 2));
+        drop(copy);
+        assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 2));
+        assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 5));
+
+        client.detach_channel(3);
+        assert_eq!(read_frame(&mut peer).await, Frame::close(3, vec![]));
+        mock_attach(&client, &mut peer).await;
+        assert!(!HostClient::grant_tab_credit(&stale, 1));
+        drop(stale);
+        peer.write_all(&Frame::data(3, vec![b'b']).encode().unwrap())
+            .await
+            .unwrap();
+        let HostEvent::DeferredStreamData { credit, .. } = event(&mut events).await else {
+            panic!("expected fresh DATA");
+        };
+        drop(credit);
+        assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 1));
+    }
+
+    #[tokio::test]
+    async fn deferred_credit_cannot_cross_reconnect_with_reused_ids() {
+        let (client, mut events, mut peer) = mock_client_with_options(vec![], true);
+        mock_attach(&client, &mut peer).await;
+        let data = Frame::data(3, vec![b'a'; 5]).encode().unwrap();
+        peer.write_all(&data).await.unwrap();
+        let HostEvent::DeferredStreamData { credit: stale, .. } = event(&mut events).await else {
+            panic!("expected original connection DATA");
+        };
+
+        client.clear_active();
+        let mut peer = install_mock_connection(&client, vec![]);
+        assert!(matches!(
+            event(&mut events).await,
+            HostEvent::StateChanged(ConnectionState::Connected { conn_id: 1, .. })
+        ));
+        assert!(matches!(
+            event(&mut events).await,
+            HostEvent::VersionInfo { .. }
+        ));
+        mock_attach(&client, &mut peer).await;
+        assert!(!HostClient::grant_tab_credit(&stale, 1));
+        drop(stale);
+
+        peer.write_all(&data).await.unwrap();
+        let HostEvent::DeferredStreamData { credit, .. } = event(&mut events).await else {
+            panic!("expected replacement connection DATA");
+        };
+        assert!(HostClient::grant_tab_credit(&credit, 2));
+        assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 2));
+        drop(credit);
+        assert_eq!(read_frame(&mut peer).await, Frame::credit(3, 3));
+    }
+
+    #[tokio::test]
+    async fn deferred_credit_rejects_peer_overdraw() {
+        let (client, mut events, mut peer) = mock_client_with_options(vec![], true);
+        mock_attach(&client, &mut peer).await;
+        peer.write_all(
+            &Frame::data(3, vec![0; INITIAL_CREDIT + 1])
+                .encode()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert!(events.try_recv().is_err());
+    }
+
+    // UT-PRESET-03
+    #[tokio::test]
+    async fn preset_detection_negotiates_and_normalizes_on_the_wire() {
+        use ddg_agents_proto::host::PresetDetectStatus::{Found, NotFound, Unknown};
+
+        let (client, _events, mut peer) = mock_client();
+        assert!(!client.supports_agent_presets());
+        assert_eq!(
+            client.detect_agent_presets().await.unwrap(),
+            PresetDetectOutcome::Unsupported
+        );
+        // The next frame must be ping, not an unadvertised preset RPC.
+        let (ping, _) = tokio::join!(
+            client.call_raw("ping", json!({})),
+            rpc_reply(&mut peer, "ping", json!({}), json!({"ok": true}))
+        );
+        ping.unwrap();
+        client.close();
+        assert!(matches!(
+            client.detect_agent_presets().await,
+            Err(PresetDetectError::Rpc(e)) if e.data.kind == ErrorKind::Unavailable
+        ));
+
+        let (client, _events, mut peer) =
+            mock_client_with_features(vec![FEATURE_AGENT_PRESETS_V1.into()]);
+        assert!(client.supports_agent_presets());
+        let complete = json!([
+            {"id":"claude-code","status":"unknown"}, {"id":"codex","status":"found"},
+            {"id":"antigravity","status":"not_found"}, {"id":"pi","status":"found"},
+            {"id":"opencode","status":"unknown"}
+        ]);
+        let partial = json!([
+            {"id":"future-agent","status":"found"}, {"id":"codex","status":"not_found"}
+        ]);
+        for (items, expected) in [
+            (complete, [Found, NotFound, Found, Unknown, Unknown]),
+            (partial, [Unknown, Unknown, NotFound, Unknown, Unknown]),
+        ] {
+            let (result, _) = tokio::join!(
+                client.detect_agent_presets(),
+                rpc_reply(&mut peer, "host.agent_presets_detect", json!({}), json!({"items": items}))
+            );
+            let PresetDetectOutcome::Detected(items) = result.unwrap() else {
+                panic!("advertised preset detection unsupported");
+            };
+            assert_eq!(
+                items
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["pi", "antigravity", "codex", "opencode", "claude-code"]
+            );
+            assert_eq!(
+                items.into_iter().map(|item| item.status).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        for invalid in [
+            json!([{"id":"pi","status":"found"},{"id":"pi","status":"unknown"}]),
+            json!([{"id":"future","status":"found"},{"id":"future","status":"unknown"}]),
+            json!(
+                (0..33)
+                    .map(|i| json!({"id": format!("future-{i}"), "status":"found"}))
+                    .collect::<Vec<_>>()
+            ),
+            json!([{"id":"pi","status":"maybe"}]),
+        ] {
+            let (result, _) = tokio::join!(
+                client.detect_agent_presets(),
+                rpc_reply(&mut peer, "host.agent_presets_detect", json!({}), json!({"items": invalid}))
+            );
+            assert!(matches!(result, Err(PresetDetectError::Protocol(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn preset_detection_cleans_pending_on_cancel_timeout_and_reconnect() {
+        let (client, _events, mut peer) =
+            mock_client_with_features(vec![FEATURE_AGENT_PRESETS_V1.into()]);
+        let conn = client.require_connection().unwrap();
+        let mut timed = Box::pin(client.detect_agent_presets());
+        tokio::select! {
+            _ = read_frame(&mut peer) => {},
+            result = &mut timed => panic!("replied before request: {result:?}"),
+        }
+        assert_eq!(conn.pending.lock().unwrap().len(), 1);
+        drop(timed);
+        assert!(conn.pending.lock().unwrap().is_empty());
+
+        let (result, _) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(5), client.detect_agent_presets()),
+            read_frame(&mut peer),
+        );
+        assert!(matches!(
+            result.unwrap(),
+            Err(PresetDetectError::Rpc(e)) if e.data.kind == ErrorKind::Unavailable
+                && e.message.contains("timed out")
+        ));
+        assert!(conn.pending.lock().unwrap().is_empty());
+
+        let mut detect = Box::pin(client.detect_agent_presets());
+        tokio::select! {
+            _ = read_frame(&mut peer) => {},
+            result = &mut detect => panic!("replied before request: {result:?}"),
+        }
+        client.clear_active();
+        let mut replacement = install_mock_connection(&client, vec![]);
+        assert!(matches!(
+            detect.await,
+            Err(PresetDetectError::Rpc(e)) if e.data.kind == ErrorKind::Unavailable
+        ));
+        assert!(conn.pending.lock().unwrap().is_empty());
+        let (ping, _) = tokio::join!(
+            client.call_raw("ping", json!({})),
+            rpc_reply(&mut replacement, "ping", json!({}), json!({"ok": true}))
+        );
+        ping.unwrap();
     }
 
     #[tokio::test]
@@ -1602,7 +2123,7 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_reset_notice_and_live_host_notifications() {
-        let (client, mut events, mut peer) = mock_client();
+        let (client, mut events, mut peer) = mock_client_with_options(vec![], true);
         let expected_catalog = Catalog::empty("peer");
         let expected_notice = ResetNotice {
             notice_id: "v1-reset".into(),
@@ -1627,6 +2148,9 @@ mod tests {
             .await;
             notify(&mut peer, 0, "host.external_input", json!({"session_id": TAB_ID, "pty_id": 7, "run_generation": 8, "byte_len": 47, "from_session_id": SENDER_ID, "from_host_id": "hub", "is_remote": true})).await;
             notify(&mut peer, 0, "host.session_exited", json!({"session_id": TAB_ID, "room_id": ROOM_ID, "run_generation": 8, "exit_code": 42})).await;
+            let ack = read_frame(&mut peer).await;
+            assert_eq!((ack.channel, ack.kind), (5, FrameKind::Credit));
+            assert!(ddg_agents_proto::frame::decode_credit(&ack.payload).unwrap() > 0);
         });
         let mut sub = client.catalog_subscribe().await.unwrap();
         assert_eq!(sub.seq, 1);
@@ -1806,6 +2330,7 @@ mod tests {
                 reason: "network down".into(),
             }),
             closed: AtomicBool::new(false),
+            deferred_tab_credit: false,
             event_tx: tx,
         };
         assert!(!client.is_connected());

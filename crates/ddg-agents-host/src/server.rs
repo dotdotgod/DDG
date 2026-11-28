@@ -12,10 +12,11 @@ use ddg_agents_proto::frame::{
     CONTROL_CHANNEL, Frame, FrameKind, HEADER_LEN, decode_header, encode_frame,
 };
 use ddg_agents_proto::host::{
-    HostHelloResult, MsgRecvParams, RelayAttachResult, RoomCreateParams, RoomRenameParams,
-    RoomSetLayoutParams, TabAttachParams, TabAttachResult, TabClaimControlParams, TabCloseParams,
-    TabCreateParams, TabMarkSeenParams, TabMoveParams, TabMsgSendParams, TabReleaseControlParams,
-    TabRestartParams, TabScreenParams, TabSplitParams, TabWriteParams,
+    FEATURE_AGENT_PRESETS_V1, HostAgentPresetsDetectParams, HostHelloResult, MsgRecvParams,
+    RelayAttachResult, RoomCreateParams, RoomRenameParams, RoomSetLayoutParams, TabAttachParams,
+    TabAttachResult, TabClaimControlParams, TabCloseParams, TabCreateParams, TabMarkSeenParams,
+    TabMoveParams, TabMsgSendParams, TabReleaseControlParams, TabRestartParams, TabScreenParams,
+    TabSplitParams, TabWriteParams,
 };
 use ddg_agents_proto::openrpc::agents_host_openrpc;
 use ddg_agents_proto::rpc::{ErrorKind, Request, Response, RpcError};
@@ -33,7 +34,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 pub struct HostPid(PathBuf);
 
@@ -152,6 +153,7 @@ struct ClientSession {
     next_channel: AtomicU32,
     closed: AtomicBool,
     token_seen: AtomicBool,
+    operator_revoked: Notify,
     /// Per-client connection to `ddg-terminal-server` so single-controller leases
     /// natively isolate every client connection!
     term: tokio::sync::Mutex<Option<Arc<TermConn>>>,
@@ -167,6 +169,7 @@ impl ClientSession {
             next_channel: AtomicU32::new(1),
             closed: AtomicBool::new(false),
             token_seen: AtomicBool::new(false),
+            operator_revoked: Notify::new(),
             term: tokio::sync::Mutex::new(None),
             passthrough: Mutex::new(HashMap::new()),
         }
@@ -181,6 +184,7 @@ impl ClientSession {
         if request.params.get("session_token").is_some()
             && !self.token_seen.swap(true, Ordering::AcqRel)
         {
+            self.operator_revoked.notify_waiters();
             host.relay.detach(self.conn_id, None);
         }
         Ok(request)
@@ -292,6 +296,7 @@ async fn handle_client(
     };
 
     session.closed.store(true, Ordering::Release);
+    session.operator_revoked.notify_waiters();
     host.relay.detach(session.conn_id, None);
     host.disconnect_conn(session.conn_id);
     // Close the client link even if an in-flight receive is holding a reference to it.
@@ -429,6 +434,7 @@ async fn dispatch_rpc(
                         "single_control_v1".into(),
                         "passthrough_v1".into(),
                         "agent_activity_v1".into(),
+                        FEATURE_AGENT_PRESETS_V1.into(),
                     ],
                     app_version: Some(env!("CARGO_PKG_VERSION").into()),
                     platform: Some(crate::daemon_swap::platform()),
@@ -453,6 +459,28 @@ async fn dispatch_rpc(
                 methods.extend(host.plugins.discover_methods());
             }
             Ok(doc)
+        }
+        "host.agent_presets_detect" => {
+            let revoked = session.operator_revoked.notified();
+            let denied = || RpcError::permission_denied("preset detection requires an operator connection");
+            if session.token_seen.load(Ordering::Acquire) || session.closed.load(Ordering::Acquire) {
+                Err(denied())
+            } else {
+                match serde_json::from_value::<HostAgentPresetsDetectParams>(req.params) {
+                    Ok(_) => tokio::select! {
+                        biased;
+                        _ = revoked => Err(denied()),
+                        result = host.detect_agent_presets() => {
+                            if session.token_seen.load(Ordering::Acquire) {
+                                Err(denied())
+                            } else {
+                                Ok(json!(result))
+                            }
+                        }
+                    },
+                    Err(e) => Err(RpcError::invalid_params(e.to_string())),
+                }
+            }
         }
         "host.catalog_subscribe" => {
             if !is_framed {
@@ -787,6 +815,162 @@ async fn handle_tab_release_control(
         )
         .await?;
     Ok(json!(res))
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn ut_host_01_operator_advertises_and_probes_fixed_presets() {
+    use crate::host_service::tests::{Fixture, fixture_catalog};
+
+    let mut f = Fixture::new(fixture_catalog()).await;
+    let host = f.host.clone();
+    let client = Arc::new(ClientSession::new(1, mpsc::unbounded_channel().0));
+    let call = |method: &str, params| {
+        dispatch_rpc(&host, &client, Ok(Request::new(1, method, params)), true)
+    };
+
+    let (hello, _) = tokio::join!(
+        call(
+            "hello",
+            json!(HelloParams {
+                protocol_version: PROTOCOL_VERSION,
+                framed: true,
+                client_id: None,
+            })
+        ),
+        async {
+            let req = f.expect("pty.list").await;
+            f.reply(req, json!({"ptys": []})).await;
+        },
+    );
+    let hello: HostHelloResult = serde_json::from_value(hello.0.result.unwrap()).unwrap();
+    assert!(
+        hello
+            .features
+            .iter()
+            .any(|feature| feature == "agent_presets_v1")
+    );
+
+    let method = "host.agent_presets_detect";
+    let (reply, _) = tokio::join!(call(method, json!({})), async {
+        let req = f.expect("pty.probe_bins").await;
+        assert_eq!(req.params, json!({}));
+        f.reply(
+            req,
+            json!({"items": [
+                {"bin": "agy", "status": "found"},
+                {"bin": "pi", "status": "not_found"},
+                {"bin": "claude", "status": "unknown"},
+                {"bin": "codex", "status": "found"},
+                {"bin": "/not/a/preset", "status": "found"},
+            ]}),
+        )
+        .await;
+    });
+    let expected = json!({"items": [
+        {"id": "pi", "status": "not_found"},
+        {"id": "antigravity", "status": "found"},
+        {"id": "codex", "status": "found"},
+        {"id": "opencode", "status": "unknown"},
+        {"id": "claude-code", "status": "unknown"},
+    ]});
+    assert_eq!(reply.0.result.unwrap(), expected);
+
+    let (old, _) = tokio::join!(call(method, json!({})), async {
+        let req = f.expect("pty.probe_bins").await;
+        f.respond(Response::err(req.id, RpcError::not_found("unknown method")))
+            .await;
+    });
+    let mut unknown = expected;
+    for item in unknown["items"].as_array_mut().unwrap() {
+        item["status"] = json!("unknown");
+    }
+    assert_eq!(old.0.result.unwrap(), unknown);
+    host.term().unwrap().close();
+    assert_eq!(call(method, json!({})).await.0.result.unwrap(), unknown);
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn ut_host_02_operator_requires_empty_object_and_never_allows_token_connections() {
+    use crate::host_service::tests::{Fixture, fixture_catalog};
+
+    let f = Fixture::new(fixture_catalog()).await;
+    let client = Arc::new(ClientSession::new(1, mpsc::unbounded_channel().0));
+    let check = |raw: &[u8]| {
+        let req = client.parse_request(&f.host, raw);
+        dispatch_rpc(&f.host, &client, req, true)
+    };
+    let method = "host.agent_presets_detect";
+    for params in [json!({"bins": ["pi"]}), json!([]), Value::Null] {
+        let request = serde_json::to_vec(&Request::new(1, method, params)).unwrap();
+        assert_eq!(
+            check(&request).await.0.error.unwrap().data.kind,
+            ErrorKind::InvalidParams
+        );
+    }
+    let omitted = br#"{"jsonrpc":"2.0","id":1,"method":"host.agent_presets_detect"}"#;
+    assert_eq!(
+        check(omitted).await.0.error.unwrap().data.kind,
+        ErrorKind::InvalidParams
+    );
+
+    for params in [
+        json!({"session_token": "sent-on-this-connection"}),
+        json!({}),
+    ] {
+        let request = serde_json::to_vec(&Request::new(1, method, params)).unwrap();
+        assert_eq!(
+            check(&request).await.0.error.unwrap().data.kind,
+            ErrorKind::PermissionDenied
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn ut_host_02_token_seen_cancels_an_inflight_detection() {
+    use crate::host_service::tests::{Fixture, fixture_catalog};
+    use std::time::Duration;
+
+    let mut f = Fixture::new(fixture_catalog()).await;
+    let host = f.host.clone();
+    let client = Arc::new(ClientSession::new(1, mpsc::unbounded_channel().0));
+    let detect = || {
+        dispatch_rpc(
+            &host,
+            &client,
+            Ok(Request::new(1, "host.agent_presets_detect", json!({}))),
+            true,
+        )
+    };
+    let (denied, _) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(detect(), async {
+            f.expect("pty.probe_bins").await;
+            client.parse_request(&host, br#"{"jsonrpc":"2.0","id":2,"method":"host.session_list","params":{"session_token":"seen"}}"#).unwrap();
+        })
+    }).await.unwrap();
+    assert_eq!(
+        denied.0.error.unwrap().data.kind,
+        ErrorKind::PermissionDenied
+    );
+
+    // Another operator can use the slot immediately, before the old Core request times out.
+    let other = Arc::new(ClientSession::new(2, mpsc::unbounded_channel().0));
+    let (reply, _) = tokio::join!(
+        dispatch_rpc(
+            &host,
+            &other,
+            Ok(Request::new(3, "host.agent_presets_detect", json!({}))),
+            true
+        ),
+        async {
+            let req = f.expect("pty.probe_bins").await;
+            f.reply(req, json!({"items": [{"bin": "pi", "status": "found"}]}))
+                .await;
+        }
+    );
+    assert_eq!(reply.0.result.unwrap()["items"][0]["status"], "found");
 }
 
 #[cfg(all(test, unix))]
