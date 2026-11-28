@@ -11,12 +11,12 @@
 - **남은 범위**: `T0`(사전 환경 확인 및 `docs/spec/requirements.md` §1 갱신) → `T1`–`T5`(7개 크레이트 TDD 구현) → `T6-A`(에이전트 실환경 시나리오 `A1`–`A3`) · `T6-B`(사람 GUI 실기 `H1`–`H2`) → `T6-C`(`FINAL.md`·아카이브 이관·승인 시 `main` 머지)
 
 ## 산출물: 계획·설계·태스크 경로
-- 활성 계획서(목차): [docs/plan/agent-status-icons-profiles/README.md](../../../../plan/agent-status-icons-profiles/README.md)
-- UX·Presentation Layer 설계 (필수 ASCII 아트 5종): [docs/plan/agent-status-icons-profiles/DESIGN_UI.md](../../../../plan/agent-status-icons-profiles/DESIGN_UI.md)
-- Data Network Layer·13개 신뢰 경계·제외 근거: [docs/plan/agent-status-icons-profiles/DESIGN_DATA.md](../../../../plan/agent-status-icons-profiles/DESIGN_DATA.md)
-- TDD 유닛 테스트 (7개 크레이트 22그룹): [docs/plan/agent-status-icons-profiles/TESTS.md](../../../../plan/agent-status-icons-profiles/TESTS.md)
-- 실제 환경 사용자 시나리오 (`A1`–`A3`, `H1`–`H2`): [docs/plan/agent-status-icons-profiles/SCENARIOS.md](../../../../plan/agent-status-icons-profiles/SCENARIOS.md)
-- 실행 태스크 명세: [TASKS_CORE.md](../../../../plan/agent-status-icons-profiles/TASKS_CORE.md) (`T0`–`T3`), [TASKS_HOST_UI.md](../../../../plan/agent-status-icons-profiles/TASKS_HOST_UI.md) (`T4-A`–`T6-C`)
+- 활성 계획서(목차): [docs/plan/agent-status-icons-profiles/README.md](../../../plan/agent-status-icons-profiles/README.md)
+- UX·Presentation Layer 설계 (필수 ASCII 아트 5종): [docs/plan/agent-status-icons-profiles/DESIGN_UI.md](../../../plan/agent-status-icons-profiles/DESIGN_UI.md)
+- Data Network Layer·13개 신뢰 경계·제외 근거: [docs/plan/agent-status-icons-profiles/DESIGN_DATA.md](../../../plan/agent-status-icons-profiles/DESIGN_DATA.md)
+- TDD 유닛 테스트 (7개 크레이트 22그룹): [docs/plan/agent-status-icons-profiles/TESTS.md](../../../plan/agent-status-icons-profiles/TESTS.md)
+- 실제 환경 사용자 시나리오 (`A1`–`A3`, `H1`–`H2`): [docs/plan/agent-status-icons-profiles/SCENARIOS.md](../../../plan/agent-status-icons-profiles/SCENARIOS.md)
+- 실행 태스크 명세: [TASKS_CORE.md](../../../plan/agent-status-icons-profiles/TASKS_CORE.md) (`T0`–`T3`), [TASKS_HOST_UI.md](../../../plan/agent-status-icons-profiles/TASKS_HOST_UI.md) (`T4-A`–`T6-C`)
 
 ## 확정 요구사항·설계와 결정 출처
 - **Phase B 사용자 확정 (`A1`–`A6`)**:
@@ -85,7 +85,7 @@
 ## 아카이브·main 머지 기록
 - **실제 보고서**: [docs/archive/report/2026-11-26/agent-status-icons-profiles/PLANNING.md](PLANNING.md)
 - **보고 목차**: [docs/archive/report/2026-11-26/agent-status-icons-profiles/README.md](README.md)
-- **완료 계획**: 현재 활성 경로 유지 — [docs/plan/agent-status-icons-profiles/README.md](../../../../plan/agent-status-icons-profiles/README.md) (Phase G에서는 archive로 이동하지 않음)
+- **완료 계획**: 현재 활성 경로 유지 — [docs/plan/agent-status-icons-profiles/README.md](../../../plan/agent-status-icons-profiles/README.md) (Phase G에서는 archive로 이동하지 않음)
 - **상호 링크·관련 README 인덱스 갱신**: `docs/plan/README.md`, `docs/archive/README.md`, `docs/archive/report/2026-11-26/agent-status-icons-profiles/README.md` 갱신 완료
 - **main 머지 상태·커밋**: 미수행 (계획 작성 단계)
 - **향후 머지/squash 커밋 본문에 남길 요약 항목**: 계획 경로(`docs/archive/plan/agent-status-icons-profiles/README.md`), 최종 보고서 경로(`docs/archive/report/YYYY-MM-DD/agent-status-icons-profiles/FINAL.md`), 확정 조합(`A1`–`A6`, `UX-1`–`3`, `D-1`–`4`, `RC-01`–`06`), 주요 제외 대안(v3 마이그레이션·문자열 SVG 블랙리스트·`sha2`·`turn`/`tab_activity_snapshot`·60Hz 스피너), 검증 결과(`cargo test --workspace`, `A1`–`A3`, `H1`–`H2` 또는 `Unverified` 사유) 및 잔여 위험(`R-01`–`R-04`).

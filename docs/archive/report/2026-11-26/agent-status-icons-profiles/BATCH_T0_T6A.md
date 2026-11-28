@@ -2,7 +2,7 @@
 
 - **보고 일자**: `2026-11-26`
 - **배치 상태**: **부분 완료 (`T0`–`T6-A` 구현·독립 검수·실환경 검증 PASS · `T6-B` 사람 GUI 실기 대기 `Unverified`)**
-- **활성 계획**: [docs/plan/agent-status-icons-profiles/README.md](../../../../plan/agent-status-icons-profiles/README.md) (전체 완료 전까지 아카이브 이관 보류)
+- **활성 계획**: [docs/plan/agent-status-icons-profiles/README.md](../../../plan/agent-status-icons-profiles/README.md) (전체 완료 전까지 아카이브 이관 보류)
 - **선행 보고서**: [PLANNING.md](PLANNING.md) (보존)
 - **브랜치 / 머지 상태**: 워크스페이스에 `.git` 메타데이터 부재 · `main` 머지/푸시 미수행 (사용자 승인 대기)
 
@@ -98,7 +98,7 @@
 
 ## 6. 다음 단계 (`T6-B` 사람 GUI 실기 실행 가이드)
 
-격리 환경에서 실제 운영 설정(`~/.config/ddg`)을 건드리지 않고 `H1`·`H2`를 확인하려면 아래 명령으로 앱을 실행한 뒤 [SCENARIOS.md](../../../../plan/agent-status-icons-profiles/SCENARIOS.md#사용자-시나리오-h1--사람-gui-실기-2단-사이드바--22px-분할-헤더--0hz-유휴--런처-4지선다--정렬핀peek)의 `H1`·`H2` 체크리스트를 수행하십시오.
+격리 환경에서 실제 운영 설정(`~/.config/ddg`)을 건드리지 않고 `H1`·`H2`를 확인하려면 아래 명령으로 앱을 실행한 뒤 [SCENARIOS.md](../../../plan/agent-status-icons-profiles/SCENARIOS.md#사용자-시나리오-h1--사람-gui-실기-2단-사이드바--22px-분할-헤더--0hz-유휴--런처-4지선다--정렬핀peek)의 `H1`·`H2` 체크리스트를 수행하십시오.
 
 ```sh
 WORK="$(mktemp -d /tmp/ddg-gui-verify-XXXXXX)"

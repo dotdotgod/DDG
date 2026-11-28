@@ -404,7 +404,7 @@
 
 ## 참조할 확정 요구사항·설계·프로젝트 지침
 - `/Users/dotdot/.agents/skills/ddg-planning/references/TEMPLATES.md#최종-완료-보고서-양식`
-- [PLANNING.md](../../archive/report/2026-11-26/agent-status-icons-profiles/PLANNING.md)
+- [PLANNING.md](../../report/2026-11-26/agent-status-icons-profiles/PLANNING.md)
 
 ## 작업 영역·쓰기 허용/금지 범위
 - 쓰기 허용: `docs/archive/report/YYYY-MM-DD/agent-status-icons-profiles/{README.md, FINAL.md}`, `docs/archive/plan/agent-status-icons-profiles/**`, `docs/plan/README.md`, `docs/archive/README.md`

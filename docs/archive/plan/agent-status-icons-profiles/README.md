@@ -1,9 +1,9 @@
 # 작업 계획: 탭 아이콘 · OSC 7501 에이전트 상태 · 에이전트 리스트 · `ddg` 기본 에이전트 설정
 
-[UX·UI 설계](DESIGN_UI.md) · [데이터·네트워크·보안 설계](DESIGN_DATA.md) · [TDD 유닛 테스트](TESTS.md) · [사용자 시나리오](SCENARIOS.md) · [태스크 T0–T3](TASKS_CORE.md) · [태스크 T4–T6](TASKS_HOST_UI.md) · [플래닝 완료 보고](../../archive/report/2026-11-26/agent-status-icons-profiles/PLANNING.md)
+[UX·UI 설계](DESIGN_UI.md) · [데이터·네트워크·보안 설계](DESIGN_DATA.md) · [TDD 유닛 테스트](TESTS.md) · [사용자 시나리오](SCENARIOS.md) · [태스크 T0–T3](TASKS_CORE.md) · [태스크 T4–T6](TASKS_HOST_UI.md) · [최종 완료 보고](../../report/2026-11-26/agent-status-icons-profiles/FINAL.md)
 
 ## 상태와 확정 기록
-- **상태**: **`T0`–`T6-A` 구현·자동/실환경 검증 완료 · `T6-B` 사람 GUI 실기 대기 (`Unverified`)** (`2026-11-26`, [배치 보고서](../../archive/report/2026-11-26/agent-status-icons-profiles/BATCH_T0_T6A.md))
+- **상태**: **구현·실환경 검증 완료(`T0`–`T6-A`) · 아카이브 보관 (`T6-B` 사람 GUI 실기 `Unverified` 별도 추적)** (`2026-11-26`, [최종 보고서](../../report/2026-11-26/agent-status-icons-profiles/FINAL.md))
 - **확정 조합**:
   - **Phase B (요구사항)**: `A1`(전용 `ddg run`/`ddg agent`/`--agent` + `DefaultShell` 100% 호환) · `A2`(`ddg run` 기본 가시 룸+즉시 attach, `--bg`/`--background` 백그라운드) · `A3`(`~/.config/ddg/agents.json`+`host_overrides` CLI·GUI 공유, 일반 `+` 탭=셸 유지+별도 런처) · `A4`(OSC 7501 보고 + `ddg` 에이전트 실행 세션 리스트 포함, `rm_bg_*` 실행 중만 표시·종료 즉시 제거) · `A5`(내장 SVG + OSC 7501 `app` + OS `foreground` 최소 식별자 + 로컬 `~/.config/ddg/icons/`·`programs.json` 1차 포함) · `A6`(P0+P1 단일 마일스톤 일괄 포함)
   - **Phase C (UX)**: `UX-1`(Peek 기본 `want_control=false` + `[제어 요청]` 임시 키 입력 + 닫기 시 자동 반납) · `UX-2`(전체 리스트 수동 순서 + `manual` 자동 전환) · `UX-3`(사이드바 접이식 2단 섹션 상단 `에이전트` 최대 45% + 하단 `룸`, 외부 셸 `ddg run` 현재 `cwd` 새 가시 룸)
@@ -103,5 +103,5 @@ Herdr(`0.1.18` / `herdr-core`)의 3대 표준(내장 프로그램 테이블+SVG+
 - [TASKS_HOST_UI.md](TASKS_HOST_UI.md): `T4-A` (`ddg-agents-host`), `T4-B` (`ddg-agents-cli`), `T5` (`native/` GPUI), `T6-A` (에이전트 시나리오), `T6-B` (사람 GUI 실기), `T6-C` (종료·아카이브·머지 인계)
 
 ## 최종 완료 보고서 경로
-- 플래닝 완료 보고서: [docs/archive/report/2026-11-26/agent-status-icons-profiles/PLANNING.md](../../archive/report/2026-11-26/agent-status-icons-profiles/PLANNING.md)
-- 보고서 목차: [docs/archive/report/2026-11-26/agent-status-icons-profiles/README.md](../../archive/report/2026-11-26/agent-status-icons-profiles/README.md)
+- 최종 완료 보고서: [docs/archive/report/2026-11-26/agent-status-icons-profiles/FINAL.md](../../report/2026-11-26/agent-status-icons-profiles/FINAL.md)
+- 보고서 목차: [docs/archive/report/2026-11-26/agent-status-icons-profiles/README.md](../../report/2026-11-26/agent-status-icons-profiles/README.md)
