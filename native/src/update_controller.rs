@@ -140,7 +140,7 @@ impl UpdateController {
             }
             Ok(Some(CheckOutcome::RateLimited { reset_at, .. })) => UpdatePhase::Error(error_card(
                 Code::RateLimited,
-                "GitHub 요청 한도에 도달했습니다.",
+                "GitHub rate limit reached.",
                 reset_at,
             )),
             Ok(Some(CheckOutcome::Disabled) | None) => UpdatePhase::Idle,
@@ -207,41 +207,41 @@ pub fn card(error: &UpdateError) -> ErrorCard {
 
 fn error_card(code: Code, message: &str, reset_at: Option<u64>) -> ErrorCard {
     let (title, can_retry, rate_limit) = match code {
-        Code::NetworkError => ("네트워크 연결 실패", true, false),
-        Code::LockBusy => ("다른 업데이트가 진행 중입니다", true, false),
-        Code::RateLimited => ("GitHub 요청 한도", false, true),
-        Code::UpdateDisabled => ("업데이트가 꺼져 있습니다", false, false),
-        Code::InvalidRepo => ("잘못된 릴리스 소스", false, false),
-        Code::DisallowedUrlOrHost => ("허용되지 않은 주소", false, false),
-        Code::RedirectLimitExceeded => ("리디렉션 한도 초과", false, false),
-        Code::ResponseTooLarge => ("응답 크기 한도 초과", false, false),
-        Code::AssetNotFound => ("설치 파일을 찾을 수 없습니다", false, false),
-        Code::ManifestInvalid => ("릴리스 정보가 유효하지 않습니다", false, false),
-        Code::ChecksumMismatch => ("파일 체크섬 불일치", false, false),
-        Code::SignatureInvalid => ("릴리스 서명 검증 실패", false, false),
-        Code::SignatureMissing => ("릴리스 서명 누락", false, false),
-        Code::CodesignInvalid => ("앱 서명 검증 실패", false, false),
-        Code::NotarizationInvalid => ("앱 공증 검증 실패", false, false),
-        Code::AppTranslocated => ("앱을 설치 위치에서 실행하세요", false, false),
-        Code::InstallDirNotWritable => ("설치 위치에 쓸 수 없습니다", false, false),
-        Code::InsufficientDiskSpace => ("디스크 공간 부족", false, false),
-        Code::ArchiveUnsafe => ("안전하지 않은 압축 파일", false, false),
-        Code::ConfirmationRequired => ("사용자 확인 필요", false, false),
-        Code::DowngradeDenied => ("다운그레이드 확인 필요", false, false),
+        Code::NetworkError => ("Network connection failed", true, false),
+        Code::LockBusy => ("Another update is in progress", true, false),
+        Code::RateLimited => ("GitHub rate limit", false, true),
+        Code::UpdateDisabled => ("Updates are disabled", false, false),
+        Code::InvalidRepo => ("Invalid release source", false, false),
+        Code::DisallowedUrlOrHost => ("Address not allowed", false, false),
+        Code::RedirectLimitExceeded => ("Redirect limit exceeded", false, false),
+        Code::ResponseTooLarge => ("Response size limit exceeded", false, false),
+        Code::AssetNotFound => ("Installer not found", false, false),
+        Code::ManifestInvalid => ("Invalid release information", false, false),
+        Code::ChecksumMismatch => ("File checksum mismatch", false, false),
+        Code::SignatureInvalid => ("Release signature verification failed", false, false),
+        Code::SignatureMissing => ("Release signature missing", false, false),
+        Code::CodesignInvalid => ("App signature verification failed", false, false),
+        Code::NotarizationInvalid => ("App notarization verification failed", false, false),
+        Code::AppTranslocated => ("Run the app from its installed location", false, false),
+        Code::InstallDirNotWritable => ("Install location is not writable", false, false),
+        Code::InsufficientDiskSpace => ("Not enough disk space", false, false),
+        Code::ArchiveUnsafe => ("Unsafe archive", false, false),
+        Code::ConfirmationRequired => ("Confirmation required", false, false),
+        Code::DowngradeDenied => ("Downgrade confirmation required", false, false),
         Code::SchemaIncompatibleDowngrade => (
-            "데이터 스키마 비호환으로 변경이 차단되었습니다",
+            "Change blocked by an incompatible data schema",
             false,
             false,
         ),
-        Code::HolderRestartRequired => ("Holder 재시작 필요", false, false),
-        Code::FailedVersionBlocked => ("실패한 버전의 자동 재시도 차단", false, false),
-        Code::RollbackUnavailable => ("롤백 백업이 없습니다", false, false),
-        Code::RollbackVerificationFailed => ("롤백 백업 검증 실패", false, false),
-        Code::DaemonSwapFailedRolledBack => ("업데이트 실패 · 자동 롤백됨", false, false),
-        Code::DaemonSwapFailedRollbackFailed => ("업데이트 및 복구 실패", false, false),
-        Code::ContainerUpdateUnsupported => ("컨테이너 이미지를 갱신하세요", false, false),
-        Code::ProtocolIncompatible => ("프로토콜 버전 비호환", false, false),
-        Code::HostSecurityBlocked => ("호스트 보안 정책으로 차단되었습니다", false, false),
+        Code::HolderRestartRequired => ("Holder restart required", false, false),
+        Code::FailedVersionBlocked => ("Automatic retry blocked for failed version", false, false),
+        Code::RollbackUnavailable => ("No rollback backup available", false, false),
+        Code::RollbackVerificationFailed => ("Rollback backup verification failed", false, false),
+        Code::DaemonSwapFailedRolledBack => ("Update failed · Rolled back automatically", false, false),
+        Code::DaemonSwapFailedRollbackFailed => ("Update and recovery failed", false, false),
+        Code::ContainerUpdateUnsupported => ("Update the container image", false, false),
+        Code::ProtocolIncompatible => ("Incompatible protocol version", false, false),
+        Code::HostSecurityBlocked => ("Blocked by host security policy", false, false),
     };
     let message = display_error(message);
     ErrorCard {
@@ -352,6 +352,10 @@ mod tests {
     #[test]
     fn update_controller_cards() {
         assert_eq!(Code::ALL.len(), 31);
+        assert_eq!(
+            error_card(Code::RateLimited, "", None).title,
+            "GitHub rate limit"
+        );
         for &code in Code::ALL {
             let card = error_card(code, "Bearer not-for-display", Some(123));
             assert!(!card.message.contains("not-for-display"));

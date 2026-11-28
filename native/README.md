@@ -2,6 +2,12 @@
 
 macOS arm64의 GPUI 개발 실행과 멀티 호스트(`ddg-terminal-server` · `ddg-agents-host` · `docker/`) 빌드·검증 안내다. GPUI가 유일한 데스크톱 앱 실행 경로다.
 
+## macOS 릴리스 설치
+
+Apple Silicon용 `darwin-arm64.app.zip` 또는 Intel용 `darwin-x86_64.app.zip`으로 끝나는 릴리스를 풀고, 쓰기 가능한 Applications 폴더로 `DDG Agents.app`을 옮긴다. 선언된 최소 macOS는 11.0이지만 Ghostty VT의 Intel 슬라이스는 13.0을 선언하므로 Intel 실기 검증 전에는 지원 하한을 보장하지 않는다.
+
+Apple Silicon에서 Intel Mac으로 `ddg machine add --install`, `ddg machine install` 또는 GUI 머신 설치를 실행하면 같은 버전의 릴리스에서 두 데몬만 SSH로 전송한다. 전송 전에 체크섬·앱 서명·Team ID·Gatekeeper·아키텍처를 검사한다. 오프라인에서도 검증을 통과하는 같은 버전 캐시가 필요하며, 미발행 버전이나 서명 없는 개발 바이너리로 우회할 수 없다.
+
 ## 검증 환경
 
 - macOS 26.6.2 arm64, Rust 1.100.0, Xcode 27.0 및 Metal Toolchain, GPUI 0.2.2 (Apache-2.0), Ghostty VT 1.0.1 (MIT)
@@ -34,6 +40,7 @@ cargo run -p ddg-agents-native
 | 새 룸 | `⌘+N` | `Ctrl+N` |
 | 새 탭 / 현재 탭 닫기 | `⌘+T` / `⌘+W` | `Ctrl+T` / `Ctrl+W` |
 | 이전 / 다음 탭 (순환) | `⌘+Shift+[` / `⌘+Shift+]` | `Ctrl+Shift+[` / `Ctrl+Shift+]` |
+| 이전 / 다음 룸 (순환) | `⌘+Option+[` / `⌘+Option+]` | `Ctrl+Alt+[` / `Ctrl+Alt+]` |
 | 1–9번째 탭 선택 | `⌘+1`–`9` | `Ctrl+1`–`9` |
 | 전체 UI 확대 / 축소 / 100%로 재설정 | `⌘++` / `⌘+-` / `⌘+0` | `Ctrl++` / `Ctrl+-` / `Ctrl+0` |
 | 좌우 분할 | `⌘+D` | `Ctrl+Shift+D` |
@@ -44,7 +51,30 @@ cargo run -p ddg-agents-native
 
 `Ctrl+Shift+Tab` / `Ctrl+Tab`도 이전 / 다음 탭으로 순환한다.
 
-전체 UI 확대/축소는 터미널 글꼴을 포함해 50%–200% 범위에서 10%p씩 조절한다. `+` 대신 `=`도 사용할 수 있으며, 탭 바 오른쪽의 배율 표시를 클릭하면 100%로 돌아간다. 새 기본 100%는 이전 90%와 같은 크기이며, 기존 v1 배율 설정은 새 기본값으로 돌아간다. 배율은 `~/.config/ddg/ui.json`에 저장된다(`DDG_CONFIG_DIR` 또는 `XDG_CONFIG_HOME`을 설정한 경우 해당 설정 디렉터리 사용).
+룸 단축키는 연결되어 현재 카탈로그를 받은 모든 머신의 표시 룸을 사이드바 순서대로 순환한다. 전환하면 `Rooms` 섹션과 대상 머신을 자동으로 펼치고, 대상 룸의 탭 선택·패널 포커스·확대 상태를 유지한다. 세션을 다른 룸이나 머신으로 옮기지는 않는다.
+
+활성 창의 일반 터미널에 포커스가 있을 때만 동작하며, 읽기 전용에서도 사용할 수 있다. AgentList, Peek, 모달·폼, 런처, 유효한 붙여넣기 확인, IME 조합 중에는 기존 키 처리를 따르고, 분할 경계를 드래그하는 동안에는 전환하지 않는다. OS나 키보드 배치에서 단축키를 사용할 수 없으면 사이드바에서 룸을 클릭한다.
+
+전체 UI 확대/축소는 터미널 글꼴을 포함해 50%–200% 범위에서 10%p씩 조절한다. `+` 대신 `=`도 사용할 수 있으며, 탭 바 오른쪽의 배율 표시를 클릭하면 기본값인 100%로 돌아간다(UI 글꼴 15.4px, 터미널 13.2px). 기존 v2에 저장된 배율은 그대로 적용된다. 기존 v2의 다른 환경설정은 유지되며, v1은 읽지 않고 기본값을 사용한다. 배율은 `~/.config/ddg/ui.json`에 저장된다(`DDG_CONFIG_DIR` 또는 `XDG_CONFIG_HOME`을 설정한 경우 해당 설정 디렉터리 사용).
+
+## 내장 에이전트 프리셋
+
+- 로컬 호스트 연결 시 이 앱은 발견한 Pi, Antigravity, Codex, OpenCode, Claude Code를 `agents.json`에 자동 등록한다. 기존 프로필과 기본 에이전트는 그대로 둔다. 원격 머신에는 자동 등록하지 않는다.
+- Agent Settings의 `Detected`에서 탐지할 머신을 선택하거나 새로고침한다. 이 선택은 Per-Machine Overrides의 편집 대상과 별개다. 발견한 항목은 모달 초안에 추가해 수정·취소할 수 있으며 `Save` 후에만 런처에 표시된다. 런처에는 저장된 프로필만 나온다. 구형 호스트 또는 판정 불가는 확정된 미발견과 구분한다.
+- GUI가 `ui.json`에 이미 기록한 프리셋은 삭제 후 재시작해도 자동 복구하지 않으며, `Detected`나 CLI로 명시적으로 재등록할 수 있다. GUI를 처음 열기 전에 CLI에서 추가했다가 삭제했거나 `ui.json`의 이력을 지운 경우에는 다시 자동 등록될 수 있다. 반대로 자동 등록 도중 이력만 저장되었다면 명시적으로 추가해야 한다.
+
+```sh
+ddg agent presets --host local --json  # 탐지 결과와 등록 여부 조회
+ddg agent presets --no-detect          # 호스트 연결 없이 내장 목록 조회
+ddg agent add --preset pi              # 탐지 없이 단일 프로필 등록
+ddg agent add --detected --host local  # 발견된 미등록 프로필만 일괄 등록
+ddg agent ls                           # 저장된 프로필만 표시
+ddg run pi                             # 저장된 Pi 프로필을 대화형으로 실행
+```
+
+`--detected`는 기존 프로필을 덮어쓰거나 기본 에이전트를 변경하지 않는다. 발견 항목이 없고 일부 또는 전부를 확인할 수 없으면 오류를 반환한다. `--preset`에서 `--default`를 명시하면 해당 프로필이 기본값이 된다. 탐지 대상 호스트는 검사 위치일 뿐, 등록된 프로필의 실행 머신을 고정하지 않는다.
+
+탐지는 실제 실행을 담당하는 Holder의 `PATH`에서 절대 경로 항목만 검사한다. 로그인 셸 설정을 읽거나 후보 바이너리를 실행하지 않으며, 설치·로그인·정상 실행을 보장하지 않는다. Finder/Spotlight로 시작한 앱의 Holder가 터미널과 다른 `PATH`를 상속하면 터미널에서 실행되는 CLI도 발견되지 않을 수 있다. Windows에서는 직접 실행 가능한 `.exe`를 찾으며 `.cmd`/`.bat`/`.ps1` 래퍼만 있으면 `unknown`으로 표시될 수 있다.
 
 ## 테스트 및 스키마 확인
 

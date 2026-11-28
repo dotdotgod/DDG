@@ -16,7 +16,7 @@ use ddg_agents_update::{
 use gpui::{prelude::*, *};
 use std::sync::atomic::Ordering;
 
-pub const UPDATE_BANNER_HEIGHT: f32 = 32.;
+pub const UPDATE_BANNER_HEIGHT: f32 = 27.;
 const AMBER: u32 = 0xe5c07b;
 const BLUE: u32 = 0x8db7ff;
 
@@ -67,19 +67,19 @@ impl BlockedCard {
         };
         let remote_old = *remote_protocol != 0 && remote_protocol < local_protocol;
         let (action, guide, local_old) = match (&machine.profile.transport, remote_old) {
-            (HostTransport::Ssh { .. }, true) => ("원격 호스트 업데이트", false, false),
+            (HostTransport::Ssh { .. }, true) => ("Update Remote Host", false, false),
             (HostTransport::DockerExec { .. } | HostTransport::ContainerSsh { .. }, true) => {
-                ("안내 보기", true, false)
+                ("View Guide", true, false)
             }
-            _ => ("로컬 업데이트 확인", false, true),
+            _ => ("Check for Local Updates", false, true),
         };
         let version = remote_version
             .as_ref()
-            .map(|v| format!(" · 원격 v{}", display_error(v)))
+            .map(|v| format!(" · Remote v{}", display_error(v)))
             .unwrap_or_default();
         Some(Self::ProtocolIncompatible {
             title: format!(
-                "프로토콜 버전 비호환 (원격 p{remote_protocol} / 로컬 p{local_protocol}){version}\n{}",
+                "Incompatible protocol versions (remote p{remote_protocol} / local p{local_protocol}){version}\n{}",
                 display_error(message)
             ),
             action,
@@ -91,7 +91,7 @@ impl BlockedCard {
 
 fn rolled_back(notice: &AutoRolledBackNotice) -> String {
     format!(
-        "v{} 적용 실패 · v{} 자동 롤백됨",
+        "Could not apply v{} · Automatically rolled back to v{}",
         display_error(&notice.attempted_version),
         display_error(&notice.restored_version)
     )
@@ -99,13 +99,13 @@ fn rolled_back(notice: &AutoRolledBackNotice) -> String {
 
 fn phase_text(phase: &UpdatePhase) -> String {
     match phase {
-        UpdatePhase::Idle => "업데이트를 확인할 수 있습니다.".into(),
-        UpdatePhase::Checking => "업데이트 확인 중…".into(),
-        UpdatePhase::UpToDate => "최신 버전입니다.".into(),
-        UpdatePhase::UpdateAvailable(release) => format!("새 버전 v{} 사용 가능", release.version),
-        UpdatePhase::Applying(version) => format!("{version} 적용 중…"),
+        UpdatePhase::Idle => "You can check for updates.".into(),
+        UpdatePhase::Checking => "Checking for updates…".into(),
+        UpdatePhase::UpToDate => "You're up to date.".into(),
+        UpdatePhase::UpdateAvailable(release) => format!("v{} is available", release.version),
+        UpdatePhase::Applying(version) => format!("Applying {version}…"),
         UpdatePhase::PendingHolderRestart(_) => {
-            "로컬 호스트(Holder) 재시작 필요 · 실행 중 세션에 영향".into()
+            "Local host (Holder) restart required · Running sessions will be affected".into()
         }
         UpdatePhase::AutoRolledBack(notice) => rolled_back(notice),
         UpdatePhase::Error(error) => error.title.into(),
@@ -213,7 +213,7 @@ impl Desktop {
             return false;
         }
         self.update.quit_requested_during_apply = true;
-        self.notice = Some("업데이트 적용이 끝날 때까지 종료를 보류합니다.".into());
+        self.notice = Some("The app will wait for the update to finish before quitting.".into());
         true
     }
 
@@ -229,7 +229,7 @@ impl Desktop {
             change: Change::Rollback,
             restart: false,
             downgrade: false,
-            label: "이전 버전으로 롤백",
+            label: "Roll Back to Previous Version",
         });
     }
 
@@ -280,8 +280,8 @@ impl Desktop {
         }
         let label = match &change {
             Change::LocalApply { tag, .. } => tag.clone(),
-            Change::ApplyRemote => "원격 호스트 업데이트".into(),
-            Change::Rollback => "이전 버전".into(),
+            Change::ApplyRemote => "Update Remote Host".into(),
+            Change::Rollback => "Previous Version".into(),
         };
         let operation = change.clone();
         if target.is_none() {
@@ -348,7 +348,7 @@ impl Desktop {
                 }
                 Err(UpdateError::new(
                     Code::HolderRestartRequired,
-                    "실행 중인 세션을 종료하려면 확인이 필요합니다.",
+                    "Confirmation is required to stop running sessions.",
                 ))
             }
             other => other,
@@ -366,9 +366,9 @@ impl Desktop {
                     restart,
                     downgrade,
                     label: if restart {
-                        "세션 종료 후 적용"
+                        "Stop Sessions & Apply"
                     } else {
-                        "다운그레이드 적용"
+                        "Apply Downgrade"
                     },
                 });
             }
@@ -409,7 +409,7 @@ impl Desktop {
                     } else {
                         let _ = self.update.load();
                         self.notice = Some(
-                            "롤백을 완료했습니다. 새 버전을 사용하려면 앱을 다시 여세요.".into(),
+                            "Rollback complete. Reopen the app to use the restored version.".into(),
                         );
                         if wanted_quit {
                             cx.quit();
@@ -436,14 +436,14 @@ impl Desktop {
         };
         let applying = |phase: &UpdatePhase| matches!(phase, UpdatePhase::Applying(_));
         let status = if rolled_back(&self.update.phase) || remote.is_some_and(rolled_back) {
-            Some(("롤백됨", AMBER))
+            Some(("Rolled back", AMBER))
         } else if applying(&self.update.phase) || remote.is_some_and(applying) {
-            Some(("적용 중", AMBER))
+            Some(("Applying", AMBER))
         } else if matches!(
             self.update.phase,
             UpdatePhase::UpdateAvailable(_) | UpdatePhase::PendingHolderRestart(_)
         ) {
-            Some(("업데이트", BLUE))
+            Some(("Update", BLUE))
         } else {
             None
         };
@@ -453,8 +453,8 @@ impl Desktop {
             .flex_none()
             .items_center()
             .gap_2()
-            .px_2()
-            .py_1()
+            .px_1()
+            .py_0p5()
             .cursor_pointer()
             .rounded_sm()
             .hover(|d| d.bg(rgb(0x262626)))
@@ -473,7 +473,7 @@ impl Desktop {
                         .flex_none()
                         .whitespace_nowrap()
                         .text_color(rgb(color))
-                        .child(if sidebar >= 200. {
+                        .child(if sidebar >= self.ui_scale.px(170.) {
                             format!("● {text}")
                         } else {
                             "●".into()
@@ -511,7 +511,7 @@ impl Desktop {
                 }
                 phase if progress => phase_text(phase),
                 _ => format!(
-                    "버전 불일치 (원격 v{} / 로컬 v{})",
+                    "Version mismatch (remote v{} / local v{})",
                     skew.as_deref().unwrap_or_default(),
                     self.update.current_version
                 ),
@@ -519,7 +519,7 @@ impl Desktop {
             format!("[{}] {status}", display_error(&machine.profile.label))
         } else if matches!(self.update.phase, UpdatePhase::Applying(_)) {
             format!(
-                "{} 완료 시 앱이 자동 재시작됩니다.",
+                "{} The app will restart automatically when the update finishes.",
                 phase_text(&self.update.phase)
             )
         } else {
@@ -533,11 +533,11 @@ impl Desktop {
                 )
             });
         let action = if guide {
-            "안내 보기"
+            "View Guide"
         } else if slot == Banner::Remote && !progress {
-            "원격 호스트 업데이트"
+            "Update Remote Host"
         } else {
-            "자세히"
+            "Details"
         };
         Some(
             div()
@@ -547,7 +547,7 @@ impl Desktop {
                 .gap_2()
                 .h(px(self.ui_scale.px(UPDATE_BANNER_HEIGHT)))
                 .overflow_hidden()
-                .px_3()
+                .px_1p5()
                 .text_xs()
                 .bg(rgb(if slot == Banner::Local || remote_rolled_back {
                     0x352a1b
@@ -590,7 +590,7 @@ impl Desktop {
                         el.child(Self::action_button(
                             cx,
                             "update-ack",
-                            "확인",
+                            "Confirm",
                             |this, _, _| this.acknowledge_update_rollback(),
                         ))
                     },
@@ -616,22 +616,22 @@ impl Desktop {
             .flex()
             .flex_col()
             .gap_1()
-            .p_2()
+            .p_1()
             .rounded_sm()
             .bg(rgb(0x34262a))
             .child(div().font_weight(FontWeight::SEMIBOLD).child(error.title))
             .child(error.message.clone())
             .when(error.code == Code::RateLimited, |el| {
                 el.child(error.reset_at.map_or_else(
-                    || "요청 한도 재설정 시각: 알 수 없음".into(),
-                    |at| format!("요청 한도 재설정 시각 (Unix UTC): {at}"),
+                    || "Rate limit reset time: unknown".into(),
+                    |at| format!("Rate limit reset time (Unix UTC): {at}"),
                 ))
             })
             .when_some(error.copy_hint, |el, hint| {
                 el.child(Self::action_button(
                     cx,
                     "update-copy-hint",
-                    "명령 복사",
+                    "Copy Command",
                     move |this, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(hint.into()));
                         if let Some(modal) = &mut this.update_modal {
@@ -644,7 +644,7 @@ impl Desktop {
                 el.child(Self::action_button(
                     cx,
                     "update-retry",
-                    "다시 시도",
+                    "Retry",
                     move |this, _, _| {
                         if let Some(change) = &retry {
                             if matches!(change, Change::Rollback) {
@@ -671,7 +671,7 @@ impl Desktop {
                 .gap_2()
                 .border_t_1()
                 .border_color(rgb(0x424851))
-                .pt_3()
+                .pt_1p5()
         };
         let row = || div().flex().flex_wrap().items_center().gap_2();
         let release = if let UpdatePhase::UpdateAvailable(release) = &self.update.phase {
@@ -693,24 +693,24 @@ impl Desktop {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .p_2()
+                        .p_1()
                         .rounded_sm()
                         .bg(rgb(0x352a1b))
                         .text_color(rgb(0xf1d6a8))
                         .child(format!(
-                            "[커스텀 소스] {} · 출처: {}",
+                            "[Custom Source] {} · Source: {}",
                             repo.as_str(),
                             if origin == SourceOrigin::Config {
-                                "설정"
+                                "Settings"
                             } else {
-                                "환경변수"
+                                "Environment variable"
                             }
                         ))
                         .when(origin == SourceOrigin::Config && !busy, |e| {
                             e.child(Self::action_button(
                                 cx,
                                 "update-reset-source",
-                                "기본 소스로 복원",
+                                "Restore Default Source",
                                 |this, _, _| this.configure_update(|c| c.repo = None, true),
                             ))
                         }),
@@ -722,7 +722,7 @@ impl Desktop {
             Ok(_) => {}
         }
         let local = section().child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
-            "로컬 앱 · v{} · {}",
+            "Local app · v{} · {}",
             self.update.current_version,
             phase_text(&self.update.phase)
         )));
@@ -738,7 +738,7 @@ impl Desktop {
                 .child(Self::action_button(
                     cx,
                     "update-modal-ack",
-                    "확인",
+                    "Confirm",
                     |this, _, _| this.acknowledge_update_rollback(),
                 )),
             UpdatePhase::PendingHolderRestart(tag) => {
@@ -752,14 +752,14 @@ impl Desktop {
                 local.child(Self::action_button(
                     cx,
                     "update-holder",
-                    "세션 재시작 확인",
+                    "Confirm Session Restart",
                     move |this, _, _| {
                         this.confirm_change(Confirmation {
                             target: None,
                             change: change.clone(),
                             restart: true,
                             downgrade: false,
-                            label: "세션 종료 후 적용",
+                            label: "Stop Sessions & Apply",
                         });
                     },
                 ))
@@ -790,7 +790,7 @@ impl Desktop {
             .child(
                 div()
                     .text_sm()
-                    .child("다운로드·검증 후 앱이 자동 재시작됩니다."),
+                    .child("The app restarts automatically after download and verification."),
             )
             .child(
                 row()
@@ -798,7 +798,7 @@ impl Desktop {
                         el.child(Self::action_button(
                             cx,
                             "update-notes",
-                            "릴리스 노트 열기 ↗",
+                            "Open Release Notes ↗",
                             move |_, _, cx| {
                                 if open_url(&url).is_ok() {
                                     cx.open_url(&url);
@@ -809,25 +809,25 @@ impl Desktop {
                     .child(Self::action_button(
                         cx,
                         "update-apply",
-                        "업데이트 적용",
+                        "Apply Update",
                         move |this, _, _| this.run_change(None, change.clone(), false, false),
                     )),
             )
         }));
         body = body.child(
             section()
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("설정"))
+                .child(div().font_weight(FontWeight::SEMIBOLD).child("Settings"))
                 .when(!busy, |el| {
                     el.child(
                         row()
-                            .child("자동 확인")
+                            .child("Auto-check")
                             .child(Self::action_button(
                                 cx,
                                 "update-auto",
                                 if self.update.auto_check() {
-                                    "● 켜짐"
+                                    "● On"
                                 } else {
-                                    "꺼짐"
+                                    "Off"
                                 },
                                 |this, _, _| {
                                     this.configure_update(
@@ -842,7 +842,7 @@ impl Desktop {
                                     );
                                 },
                             ))
-                            .child("채널")
+                            .child("Channel")
                             .children([UpdateChannel::Stable, UpdateChannel::Prerelease].map(
                                 |channel| {
                                     let label = config_channel(channel);
@@ -869,7 +869,7 @@ impl Desktop {
                                 el.child(Self::action_button(
                                     cx,
                                     "update-check-now",
-                                    "지금 확인",
+                                    "Check Now",
                                     |this, _, _| this.check_updates(false),
                                 ))
                             }),
@@ -880,14 +880,14 @@ impl Desktop {
                             el.child(Self::action_button(
                                 cx,
                                 "update-rollback",
-                                format!("이전 버전으로 롤백(v{})", display_error(version)),
+                                format!("Roll Back to v{}", display_error(version)),
                                 |this, _, _| this.request_rollback(None),
                             ))
                         },
                     )
                 })
                 .when(busy, |el| {
-                    el.child("진행 중에는 업데이트 설정을 변경할 수 없습니다.")
+                    el.child("Update settings cannot be changed while an update is in progress.")
                 }),
         );
         if let Some(machine) = self.active_machine() {
@@ -901,10 +901,10 @@ impl Desktop {
                         .version
                         .app_version
                         .as_deref()
-                        .unwrap_or("알 수 없음");
+                        .unwrap_or("Unknown");
                     let mut part =
                         section().child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
-                            "원격 호스트 · {} · {}",
+                            "Remote Host · {} · {}",
                             display_error(&machine.profile.label),
                             display_error(version)
                         )));
@@ -920,7 +920,7 @@ impl Desktop {
                         part = part.child(
                             div()
                                 .text_xs()
-                                .child(format!("이전 백업: v{}", display_error(rollback))),
+                                .child(format!("Previous backup: v{}", display_error(rollback))),
                         );
                     }
                     body = body.child(
@@ -932,7 +932,7 @@ impl Desktop {
                                         .child(Self::action_button(
                                             cx,
                                             "update-remote",
-                                            "원격 호스트 업데이트",
+                                            "Update Remote Host",
                                             move |this, _, _| {
                                                 this.run_change(
                                                     Some(apply_id.clone()),
@@ -945,7 +945,7 @@ impl Desktop {
                                         .child(Self::action_button(
                                             cx,
                                             "rollback-remote",
-                                            "원격 호스트 롤백",
+                                            "Roll Back Remote Host",
                                             move |this, _, _| {
                                                 this.request_rollback(Some(rollback_id.clone()))
                                             },
@@ -984,14 +984,14 @@ impl Desktop {
                     );
                     body = body.child(
                         section()
-                            .child("컨테이너 이미지를 갱신한 후 컨테이너를 다시 생성하세요.")
+                            .child("Update the container image, then recreate the container.")
                             .child(Self::action_button(
                                 cx,
                                 "update-container-guide",
                                 if modal.container_guide_expanded {
-                                    "▴ 안내 접기"
+                                    "▴ Hide Guide"
                                 } else {
-                                    "▾ 안내 보기"
+                                    "▾ View Guide"
                                 },
                                 |this, _, _| {
                                     if let Some(modal) = &mut this.update_modal {
@@ -1007,14 +1007,14 @@ impl Desktop {
                                         .overflow_x_scroll()
                                         .whitespace_nowrap()
                                         .text_sm()
-                                        .p_2()
+                                        .p_1()
                                         .bg(rgb(0x15181c))
                                         .child(command.clone()),
                                 )
                                 .child(Self::action_button(
                                     cx,
                                     "update-container-copy",
-                                    "복사",
+                                    "Copy",
                                     move |this, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             command.clone(),
@@ -1036,17 +1036,17 @@ impl Desktop {
                 .flex_none()
                 .flex_col()
                 .gap_2()
-                .p_3()
+                .p_1p5()
                 .rounded_sm()
                 .bg(rgb(0x352a1b))
                 .text_color(rgb(0xf1d6a8))
-                .child("⚠ 확인 필요 · Enter 키로 실행되지 않습니다. 버튼을 클릭하세요.")
+                .child("⚠ Confirmation required · Enter will not run this. Click the button.")
                 .child(
                     row()
                         .child(Self::action_button(
                             cx,
                             "update-cancel",
-                            "취소 (Esc)",
+                            "Cancel (Esc)",
                             |this, _, _| {
                                 if let Some(modal) = &mut this.update_modal {
                                     modal.cancel_confirmation();
@@ -1075,7 +1075,7 @@ impl Desktop {
                 )
         });
         if modal.copied_hint {
-            body = body.child(div().text_xs().child("클립보드에 복사했습니다."));
+            body = body.child(div().text_xs().child("Copied to clipboard."));
         }
         Some(
             div()
@@ -1085,18 +1085,19 @@ impl Desktop {
                 .flex()
                 .items_center()
                 .justify_center()
-                .p_3()
+                .p_1p5()
                 .bg(rgba(0x00000088))
                 .child(
                     div()
-                        .w(px(520.))
+                        .w(px(self.ui_scale.px(442.)))
+                        .debug_selector(|| "update-modal-panel".into())
                         .max_w_full()
                         .max_h_full()
                         .min_h_0()
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .p_3()
+                        .p_1p5()
                         .rounded_md()
                         .border_1()
                         .border_color(rgb(0x424851))
@@ -1107,11 +1108,11 @@ impl Desktop {
                                 .flex_none()
                                 .items_center()
                                 .justify_between()
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("업데이트"))
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Update"))
                                 .child(Self::action_button(
                                     cx,
                                     "update-close",
-                                    "닫기 ×",
+                                    "Close ×",
                                     |this, window, cx| this.close_update_modal(window, cx),
                                 )),
                         )

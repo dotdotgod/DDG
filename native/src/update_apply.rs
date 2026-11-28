@@ -11,7 +11,7 @@ fn sibling_cli() -> Result<PathBuf, UpdateError> {
     if !cli.is_file() {
         return Err(UpdateError::new(
             Code::AssetNotFound,
-            "앱과 함께 설치된 ddg 실행 파일을 찾을 수 없습니다.",
+            "Could not find the ddg executable installed with the app.",
         ));
     }
     Ok(cli)
@@ -34,7 +34,7 @@ pub async fn apply(
                 let _ = (paths, version, tag, repo, downgrade);
                 Err(UpdateError::new(
                     Code::InstallDirNotWritable,
-                    "이 플랫폼의 데스크톱 앱은 설치 패키지로 갱신하세요.",
+                    "Use the installer to update the desktop app on this platform.",
                 ))
             }
         }
@@ -43,13 +43,13 @@ pub async fn apply(
                 if !matches!(profile.transport, HostTransport::Ssh { .. }) {
                     return Err(UpdateError::new(
                         Code::ContainerUpdateUnsupported,
-                        "컨테이너 이미지를 갱신한 후 다시 연결하세요.",
+                        "Update the container image, then reconnect.",
                     ));
                 }
                 if profile.expected_host_id.is_none() {
                     return Err(UpdateError::new(
                         Code::HostSecurityBlocked,
-                        "원격 호스트 ID를 먼저 고정하세요.",
+                        "Pin the remote Host ID first.",
                     ));
                 }
             }
@@ -95,7 +95,7 @@ pub async fn apply(
             let reply = serde_json::from_slice::<Reply>(&output.stdout).map_err(|_| {
                 UpdateError::new(
                     Code::DaemonSwapFailedRollbackFailed,
-                    "ddg가 업데이트 결과를 반환하지 않았습니다.",
+                    "ddg did not return an update result.",
                 )
             })?;
             if let Some(error) = reply.error {
@@ -116,7 +116,7 @@ pub async fn apply(
             }
             Err(UpdateError::new(
                 Code::DaemonSwapFailedRollbackFailed,
-                "ddg가 업데이트 완료를 확인하지 못했습니다.",
+                "ddg could not confirm that the update completed.",
             ))
         }
     }
@@ -149,7 +149,7 @@ mod macos {
             FetchResult::Modified { body, .. } => Ok(body),
             _ => Err(UpdateError::new(
                 Code::NetworkError,
-                "릴리스 정보를 불러오지 못했습니다.",
+                "Could not load release information.",
             )),
         }
     }
@@ -210,7 +210,7 @@ mod macos {
         let app = enclosing_app(&exe).ok_or_else(|| {
             UpdateError::new(
                 Code::InstallDirNotWritable,
-                "설치된 DDG 앱 번들에서 업데이트하세요.",
+                "Run the update from the installed DDG app bundle.",
             )
         })?;
         macos_preflight_check(app)?;
@@ -219,7 +219,7 @@ mod macos {
         if !cli.starts_with(app) {
             return Err(UpdateError::new(
                 Code::CodesignInvalid,
-                "ddg가 서명된 앱 번들 내부에 있지 않습니다.",
+                "ddg is not inside a signed app bundle.",
             ));
         }
         let tag = ReleaseTag::parse(&target)?;
@@ -231,7 +231,7 @@ mod macos {
         {
             return Err(UpdateError::new(
                 Code::ManifestInvalid,
-                "프리릴리스 채널을 먼저 선택하세요.",
+                "Select the prerelease channel first.",
             ));
         }
         let state = manager.load_state()?;
@@ -243,7 +243,7 @@ mod macos {
         {
             return Err(UpdateError::new(
                 Code::InvalidRepo,
-                "릴리스 소스가 변경되었습니다. 업데이트를 다시 확인하세요.",
+                "The release source changed. Check for updates again.",
             ));
         }
         let base = format!(
@@ -261,7 +261,7 @@ mod macos {
         if manifest.protocol_version != PROTOCOL_VERSION {
             return Err(UpdateError::new(
                 Code::ProtocolIncompatible,
-                "릴리스 프로토콜이 현재 앱과 호환되지 않습니다.",
+                "The release protocol is incompatible with this app.",
             ));
         }
         let (holder, active) = live_holder(&info).await?;
@@ -277,7 +277,7 @@ mod macos {
         if state.pending_holder_restart.is_some() && !restart {
             return Err(UpdateError::new(
                 Code::HolderRestartRequired,
-                "실행 중인 세션을 종료하려면 확인이 필요합니다.",
+                "Confirmation is required to stop running sessions.",
             ));
         }
         let platform = match std::env::consts::ARCH {
@@ -302,7 +302,7 @@ mod macos {
             .ok_or_else(|| {
                 UpdateError::new(
                     Code::AssetNotFound,
-                    "이 플랫폼의 완전한 앱 번들이 없습니다.",
+                    "No complete app bundle is available for this platform.",
                 )
             })?;
         ensure_private_dir(&paths.state_dir).map_err(storage)?;
@@ -329,11 +329,11 @@ mod macos {
         } else {
             return Err(UpdateError::new(
                 Code::ArchiveUnsafe,
-                "지원하지 않는 압축 형식입니다.",
+                "Unsupported archive format.",
             ));
         }
         let unsafe_path =
-            || UpdateError::new(Code::ArchiveUnsafe, "앱 번들 경로가 올바르지 않습니다.");
+            || UpdateError::new(Code::ArchiveUnsafe, "Invalid app bundle path.");
         let bundle = stage.path().join(
             enclosing_app(Path::new(&artifact.binaries["ddg"].path)).ok_or_else(unsafe_path)?,
         );

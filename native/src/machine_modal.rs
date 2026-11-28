@@ -299,17 +299,17 @@ impl MachineModal {
                 known_hosts_file,
                 identity_file,
             }) => {
-                let mut parts = vec![format!("대상 {target}")];
+                let mut parts = vec![format!("Target {target}")];
                 if let Some(p) = port {
-                    parts.push(format!("포트 {p}"));
+                    parts.push(format!("Port {p}"));
                 }
                 if let Some(id) = identity_file {
-                    parts.push(format!("키 {id}"));
+                    parts.push(format!("Key {id}"));
                 }
                 if let Some(kh) = known_hosts_file {
                     parts.push(format!("known_hosts {kh}"));
                 }
-                Some(Ok(format!("명령어 인식됨: {}", parts.join(" · "))))
+                Some(Ok(format!("Parsed command: {}", parts.join(" · "))))
             }
             Ok(_) => None,
             Err(e) => Some(Err(e)),
@@ -338,7 +338,7 @@ impl MachineModal {
                 if let Some(p_str) = opt_str(&self.port) {
                     let p: u16 = p_str
                         .parse()
-                        .map_err(|_| format!("유효한 포트 번호가 아닙니다: {p_str}"))?;
+                        .map_err(|_| format!("Invalid port number: {p_str}"))?;
                     port = Some(p);
                 }
                 if adv_identity.is_some() {
@@ -379,7 +379,7 @@ impl MachineModal {
                     .port
                     .trim()
                     .parse()
-                    .map_err(|_| "유효한 포트 번호를 입력해 주세요 (예: 2222)".to_owned())?;
+                    .map_err(|_| "Enter a valid port number (e.g., 2222)".to_owned())?;
                 let def_label = format!("{host}:{port}");
                 (
                     HostTransport::ContainerSsh {

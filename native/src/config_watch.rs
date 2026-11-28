@@ -1,18 +1,19 @@
 //! Reload config snapshots after filesystem changes, keeping the last valid values.
 
 use crate::host_bridge::BridgeMessage;
-use crate::ui_scale::UiPrefs;
 #[cfg(test)]
 use crate::ui_scale::UiScale;
+use crate::ui_scale::{UI_PREFS_LOCK_TIMEOUT, UiPrefs};
 use ddg_agents_transport::{
     HostsConfig,
-    agent::{AgentsConfig, MAX_AGENTS_BYTES},
+    agent::{AgentConfigError, AgentsConfig, ConfigStamp, MAX_AGENTS_BYTES},
+    presets::{find_agent_preset, merge_auto_detected_presets},
     programs::{MAX_PROGRAMS_BYTES, ProgramsConfig},
 };
 use gpui::private::serde_json;
 use notify::event::{AccessKind, AccessMode, ModifyKind};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::io::Read;
@@ -76,24 +77,85 @@ fn read_config<T: gpui::private::serde::de::DeserializeOwned + Default>(
     let file = match opened {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(T::default()),
-        Err(_) => return Err("설정 파일을 열 수 없습니다".into()),
+        Err(_) => return Err("Could not open config file".into()),
     };
     let mut bytes = Vec::new();
     if !file.metadata().is_ok_and(|m| m.is_file())
         || file.take((max + 1) as u64).read_to_end(&mut bytes).is_err()
         || bytes.len() > max
     {
-        return Err("설정 파일을 읽을 수 없습니다".into());
+        return Err("Could not read config file".into());
     }
-    serde_json::from_slice(&bytes).map_err(|err| format!("설정 파일 형식 오류 ({}행)", err.line()))
+    serde_json::from_slice(&bytes).map_err(|err| format!("Invalid config file format (line {})", err.line()))
+}
+
+fn load_agents_with_stamp(path: &Path) -> Result<(AgentsConfig, ConfigStamp), String> {
+    // Don't create corruption backups just for a background read.
+    read_config::<AgentsConfig>(path, MAX_AGENTS_BYTES, true)?;
+    AgentsConfig::load(path).map_err(|err| err.to_string())
 }
 
 pub fn load_agents_snapshot(path: &Path) -> Result<AgentsConfig, String> {
-    // The watcher does not create corruption backups for transient partial writes.
-    read_config::<AgentsConfig>(path, MAX_AGENTS_BYTES, true)?;
-    AgentsConfig::load(path)
-        .map(|(config, _)| config)
-        .map_err(|err| err.to_string())
+    load_agents_with_stamp(path).map(|(config, _)| config)
+}
+
+/// Blocking startup seed; the caller checks that detection belongs to the current
+/// local connection before dispatching this to a background thread.
+pub(crate) fn auto_seed_detected_presets(
+    ui_path: &Path,
+    agents_path: &Path,
+    found_ids: &[String],
+) -> Result<Vec<String>, String> {
+    if !found_ids.iter().any(|id| find_agent_preset(id).is_some()) {
+        return Ok(Vec::new());
+    }
+    UiPrefs::load_or_missing(ui_path)
+        .map_err(|err| format!("Could not read UI settings: {err}"))?;
+    let (base, stamp) = load_agents_with_stamp(agents_path)?;
+    let owned = reserve_seed_candidates(ui_path, &base, found_ids)?;
+    save_reserved_presets(agents_path, base, stamp, &owned)
+}
+
+fn reserve_seed_candidates(
+    ui_path: &Path,
+    base: &AgentsConfig,
+    found_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut draft = base.clone();
+    let mut added_ids = Vec::new();
+    let newly_reserved_ids =
+        UiPrefs::reserve_preset_ids(ui_path, UI_PREFS_LOCK_TIMEOUT, |seeded_ids| {
+            added_ids = merge_auto_detected_presets(&mut draft, seeded_ids, found_ids).added_ids;
+        })
+        .map_err(|err| format!("Could not reserve preset history: {err}"))?;
+
+    // IDs observed in the original config are history-only; a retry must not
+    // recreate them if a concurrent writer deleted them.
+    added_ids.retain(|id| newly_reserved_ids.contains(id));
+    Ok(added_ids)
+}
+
+fn save_reserved_presets(
+    path: &Path,
+    base: AgentsConfig,
+    stamp: ConfigStamp,
+    owned_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let save = |mut config: AgentsConfig, stamp: ConfigStamp| -> Result<_, AgentConfigError> {
+        let outcome = merge_auto_detected_presets(&mut config, &mut BTreeSet::new(), owned_ids);
+        if !outcome.added_ids.is_empty() {
+            config.save(path, &stamp)?;
+        }
+        Ok(outcome.added_ids)
+    };
+    let result = match save(base, stamp) {
+        Err(AgentConfigError::Conflict) => {
+            let (latest, stamp) = load_agents_with_stamp(path)?;
+            save(latest, stamp)
+        }
+        result => result,
+    };
+    result.map_err(|err| err.to_string())
 }
 
 fn load_programs_snapshot(path: &Path) -> Result<ProgramsConfig, String> {
@@ -104,7 +166,7 @@ fn load_programs_snapshot(path: &Path) -> Result<ProgramsConfig, String> {
     if ProgramsConfig::load(path) == parsed {
         Ok(parsed)
     } else {
-        Err("programs.json 형식 오류".into())
+        Err("Invalid programs.json format".into())
     }
 }
 
@@ -361,8 +423,136 @@ mod tests {
         assert_eq!(json["pinned_agents"][0], "local:t1");
         assert_eq!(json["manual_agent_order"][0], "local:t1");
         assert_eq!(json["agent_sort"], "manual");
+        assert!(prefs.seeded_preset_ids.is_empty());
         assert_eq!(state.reload_changed().ui_prefs, Some(prefs));
+        UiPrefs::reserve_preset_ids(&path, Duration::ZERO, |ids| {
+            ids.insert("pi".into());
+        })
+        .unwrap();
+        let prefs = state.reload_changed().ui_prefs.unwrap();
+        assert_eq!(prefs.seeded_preset_ids, ["pi".into()].into());
+        assert_eq!(prefs.ui_scale_pct, 120);
         assert_no_diff(state.reload_changed(), false);
+    }
+
+    // UT-NATIVE-03: R1 crash boundary, missing inputs, and fail-closed paths.
+    #[test]
+    fn auto_seed_write_ahead_survives_followup_deletion_and_failures() {
+        let root = Scratch::new();
+        let ui = root.0.join("ui.json");
+        let agents = root.0.join("agents.json");
+        let found = ["pi", "codex"].map(String::from);
+        fs::write(&ui, b"{").unwrap();
+        assert!(auto_seed_detected_presets(&ui, &agents, &found).is_err());
+        assert_eq!(fs::read(&ui).unwrap(), b"{");
+        assert!(!agents.exists());
+        fs::remove_file(&ui).unwrap();
+
+        fs::write(&agents, b"{").unwrap();
+        assert!(auto_seed_detected_presets(&ui, &agents, &found).is_err());
+        assert_eq!(fs::read(&agents).unwrap(), b"{");
+        assert!(!ui.exists());
+        fs::remove_file(&agents).unwrap();
+
+        fs::create_dir(ui.with_extension("lock")).unwrap();
+        assert!(auto_seed_detected_presets(&ui, &agents, &found).is_err());
+        assert!(!agents.exists());
+        fs::remove_dir(ui.with_extension("lock")).unwrap();
+
+        assert_eq!(
+            auto_seed_detected_presets(&ui, &agents, &found).unwrap(),
+            ["pi", "codex"]
+        );
+        assert_eq!(
+            UiPrefs::load(&ui).unwrap().seeded_preset_ids,
+            found.clone().into()
+        );
+        let (mut config, stamp) = AgentsConfig::load(&agents).unwrap();
+        assert_eq!(config.default_agent_id, None);
+        config.agents.retain(|p| p.id != "pi");
+        config.save(&agents, &stamp).unwrap();
+        let bytes = fs::read(&agents).unwrap();
+        assert!(
+            auto_seed_detected_presets(&ui, &agents, &found)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read(&agents).unwrap(), bytes);
+    }
+
+    #[test]
+    fn auto_seed_retry_adds_only_owned_ids_and_respects_observed_deletion() {
+        use ddg_agents_transport::presets::find_agent_preset;
+        let root = Scratch::new();
+        let ui = root.0.join("ui.json");
+        let agents = root.0.join("agents.json");
+        let mut base = AgentsConfig::default();
+        for id in ["pi", "codex"] {
+            base.agents
+                .push(find_agent_preset(id).unwrap().to_profile());
+        }
+        base.default_agent_id = Some("pi".into());
+        let stamp = base.save(&agents, &Default::default()).unwrap();
+        let found = ["pi", "codex", "opencode", "antigravity"].map(String::from);
+        let other = reserve_seed_candidates(&ui, &base, &["antigravity".into()]).unwrap();
+        assert_eq!(other, ["antigravity"]);
+        let ours = reserve_seed_candidates(&ui, &base, &found).unwrap();
+        assert_eq!(ours, ["opencode"]);
+        let mut concurrent = base.clone();
+        concurrent.agents.retain(|p| p.id != "codex");
+        concurrent.agents[0].label = "custom pi".into();
+        concurrent.save(&agents, &stamp).unwrap();
+        assert_eq!(
+            save_reserved_presets(&agents, base, stamp, &ours).unwrap(),
+            ["opencode"]
+        );
+        let (config, _) = AgentsConfig::load(&agents).unwrap();
+        assert_eq!(config.default_agent_id.as_deref(), Some("pi"));
+        assert_eq!(config.find("pi").unwrap().label, "custom pi");
+        assert!(config.find("codex").is_none());
+        assert!(config.find("antigravity").is_none());
+        assert!(config.find("opencode").is_some());
+    }
+
+    #[test]
+    fn auto_seed_concurrent_calls_have_only_one_reservation_owner() {
+        let root = Scratch::new();
+        let ui = root.0.join("ui.json");
+        let agents = root.0.join("agents.json");
+        let found = ["pi".into(), "codex".into()];
+        let barrier = std::sync::Barrier::new(2);
+        let (first, second) = std::thread::scope(|scope| {
+            let seed = || {
+                barrier.wait();
+                auto_seed_detected_presets(&ui, &agents, &found).unwrap()
+            };
+            let first = scope.spawn(seed);
+            let second = scope.spawn(seed);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert!(first.is_empty() || second.is_empty());
+        assert_eq!([first, second].concat(), found);
+        assert_eq!(AgentsConfig::load(&agents).unwrap().0.agents.len(), 2);
+    }
+
+    #[test]
+    fn auto_seed_keeps_ledger_if_agents_save_fails_after_reservation() {
+        let root = Scratch::new();
+        let ui = root.0.join("ui.json");
+        let agents = root.0.join("agents.json");
+        let found = ["pi".into()];
+        let agents_lock = root.0.join("agents.lock");
+        fs::create_dir(&agents_lock).unwrap();
+        assert!(auto_seed_detected_presets(&ui, &agents, &found).is_err());
+        assert!(!agents.exists());
+        assert!(UiPrefs::load(&ui).unwrap().seeded_preset_ids.contains("pi"));
+        fs::remove_dir(agents_lock).unwrap();
+        assert!(
+            auto_seed_detected_presets(&ui, &agents, &found)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!agents.exists());
     }
 
     #[test]
@@ -391,11 +581,14 @@ mod tests {
         assert!(diff.had_invalid);
 
         cfg.save(&path).unwrap();
-        fs::write(&ui_path, br#"{"schema_version":1,"ui_scale_pct":90}"#).unwrap();
+        let invalid_ui = br#"{"schema_version":1,"ui_scale_pct":90}"#;
+        fs::write(&ui_path, invalid_ui).unwrap();
         assert_no_diff(state.reload_changed(), true);
-        UiPrefs::from(UiScale::from_percent(160))
-            .save(&ui_path)
-            .unwrap();
+        let valid = UiPrefs::from(UiScale::from_percent(160));
+        assert!(valid.save(&ui_path).is_err());
+        assert_eq!(fs::read(&ui_path).unwrap(), invalid_ui);
+        fs::remove_file(&ui_path).unwrap();
+        valid.save(&ui_path).unwrap();
         assert_no_diff(state.reload_changed(), false);
 
         let mut invalid = cfg.clone();

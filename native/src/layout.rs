@@ -1,6 +1,6 @@
 use ddg_agents_proto::host::{MAX_SPLIT_RATIO_BP, MIN_SPLIT_RATIO_BP, PaneNode, SplitAxis, TabId};
 
-pub const PANE_DIVIDER: f32 = 4.0;
+pub const PANE_DIVIDER: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaneRect {
@@ -249,8 +249,8 @@ mod tests {
         assert_eq!(
             panes,
             [
-                ("a".into(), rect(10., 20., 70., 104.)),
-                ("b".into(), rect(84., 20., 131., 60.)),
+                ("a".into(), rect(10., 20., 71., 104.)),
+                ("b".into(), rect(84., 20., 131., 61.)),
                 ("c".into(), rect(84., 84., 131., 40.))
             ]
         );
@@ -260,16 +260,16 @@ mod tests {
                 DividerHit {
                     path: vec![],
                     axis: SplitAxis::Horizontal,
-                    rect: rect(80., 20., 4., 104.),
+                    rect: rect(81., 20., 3., 104.),
                     parent_origin: 10.,
-                    parent_extent: 201.
+                    parent_extent: 202.
                 },
                 DividerHit {
                     path: vec![SplitSide::Second],
                     axis: SplitAxis::Vertical,
-                    rect: rect(84., 80., 131., 4.),
+                    rect: rect(84., 81., 131., 3.),
                     parent_origin: 20.,
-                    parent_extent: 100.
+                    parent_extent: 101.
                 },
             ]
         );

@@ -28,56 +28,7 @@ struct CustomAssets {
     resolved: HashMap<PathBuf, (IconStamp, Option<SharedString>)>,
 }
 
-fn program_asset(key: &str) -> Option<(&'static str, &'static [u8])> {
-    Some(match key {
-        "claude-code" => (
-            "programs/claude-code.svg",
-            include_bytes!("../assets/icons/claude-code.svg"),
-        ),
-        "codex" => (
-            "programs/codex.svg",
-            include_bytes!("../assets/icons/codex.svg"),
-        ),
-        "pi" => ("programs/pi.svg", include_bytes!("../assets/icons/pi.svg")),
-        "gemini" => (
-            "programs/gemini.svg",
-            include_bytes!("../assets/icons/gemini.svg"),
-        ),
-        "aider" => (
-            "programs/aider.svg",
-            include_bytes!("../assets/icons/aider.svg"),
-        ),
-        "opencode" => (
-            "programs/opencode.svg",
-            include_bytes!("../assets/icons/opencode.svg"),
-        ),
-        "cursor" => (
-            "programs/cursor.svg",
-            include_bytes!("../assets/icons/cursor.svg"),
-        ),
-        "nvim" => (
-            "programs/nvim.svg",
-            include_bytes!("../assets/icons/nvim.svg"),
-        ),
-        "cargo" => (
-            "programs/cargo.svg",
-            include_bytes!("../assets/icons/cargo.svg"),
-        ),
-        "zsh" => (
-            "programs/zsh.svg",
-            include_bytes!("../assets/icons/zsh.svg"),
-        ),
-        "bash" => (
-            "programs/bash.svg",
-            include_bytes!("../assets/icons/bash.svg"),
-        ),
-        "fish" => (
-            "programs/fish.svg",
-            include_bytes!("../assets/icons/fish.svg"),
-        ),
-        _ => return None,
-    })
-}
+include!(concat!(env!("OUT_DIR"), "/program_assets.rs"));
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
@@ -458,6 +409,118 @@ fn valid_svg(svg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_programs_resolve_on_local_and_remote() {
+        let assets = AppAssets::default();
+        for program in ddg_agents_transport::programs::ProgramsConfig::default().programs {
+            for remote in [false, true] {
+                let path = assets.resolve_icon_key(None, &program.icon, remote);
+                assert_ne!(path.as_ref(), Icon::Terminal.path(), "{}", program.id);
+                let data = assets.load(&path).unwrap().unwrap();
+                let svg = roxmltree::Document::parse(std::str::from_utf8(&data).unwrap()).unwrap();
+                let root = svg.root_element();
+                assert!(root.has_tag_name("svg"));
+                let view_box: Vec<_> = root
+                    .attribute("viewBox")
+                    .unwrap_or_else(|| panic!("no viewBox: {path}"))
+                    .split_ascii_whitespace()
+                    .map(|n| n.parse::<f32>().unwrap())
+                    .collect();
+                assert_eq!(view_box.len(), 4, "{path}");
+                assert!(view_box.iter().all(|n| n.is_finite()), "{path}");
+                assert!(view_box[2] > 0. && view_box[3] > 0., "{path}");
+                for dimension in ["width", "height"] {
+                    let n: u32 = root.attribute(dimension).unwrap().parse().unwrap();
+                    assert!((1..=64).contains(&n), "{path}: {dimension}={n}");
+                }
+                if program.tint {
+                    assert!(
+                        !std::str::from_utf8(&data).unwrap().contains("currentColor"),
+                        "{path}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn builtin_programs_raster_at_bounded_size(cx: &mut gpui::TestAppContext) {
+        let renderer = cx.update(|cx| cx.svg_renderer());
+        for program in ddg_agents_transport::programs::ProgramsConfig::default().programs {
+            let (_, data) = program_asset(&program.icon).unwrap();
+            let image = gpui::Image::from_bytes(gpui::ImageFormat::Svg, data.to_vec())
+                .to_image_data(renderer.clone())
+                .unwrap_or_else(|error| panic!("{}: {error}", program.id));
+            let pixels = image.as_bytes(0).unwrap();
+            assert!(pixels.len() <= 128 * 128 * 4, "{}", program.id);
+            assert!(
+                pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0),
+                "{}",
+                program.id
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn antigravity_resvg_rasters_keep_the_mask_and_color(cx: &mut gpui::TestAppContext) {
+        let data = AppAssets::default()
+            .load("programs/antigravity.svg")
+            .unwrap()
+            .unwrap();
+        let svg = std::str::from_utf8(&data).unwrap();
+        assert!(
+            !valid_svg(svg),
+            "trusted embedded SVG is not a valid custom icon"
+        );
+        let renderer = cx.update(|cx| cx.svg_renderer());
+        let render = |data| {
+            gpui::Image::from_bytes(gpui::ImageFormat::Svg, data)
+                .to_image_data(renderer.clone())
+                .unwrap()
+        };
+        let check = |image: &gpui::RenderImage, n: usize| {
+            let pixels = image.as_bytes(0).unwrap();
+            assert_eq!(pixels.len(), n * n * 4);
+            let pixel = |x: usize, y: usize| &pixels[(y * n + x) * 4..][..4];
+            assert_eq!(pixel(0, 0)[3], 0, "outside of mask at {n}px");
+            assert_eq!(pixel(n / 2, n * 7 / 8)[3], 0, "notch at {n}px");
+            assert!(pixel(n / 2, n / 3)[3] > 200, "inside of mask at {n}px");
+            // GPUI returns BGRA. Require multiple distinct color families, not just alpha.
+            let (pixels, _) = pixels.as_chunks::<4>();
+            assert!(
+                pixels
+                    .iter()
+                    .any(|p| p[3] > 200 && i16::from(p[0]) - i16::from(p[2]) > 30),
+                "missing blue at {n}px"
+            );
+            assert!(
+                pixels
+                    .iter()
+                    .any(|p| p[3] > 200 && i16::from(p[2]) - i16::from(p[0]) > 30),
+                "missing warm color at {n}px"
+            );
+        };
+        // TestAppContext does not let us replace its AssetSource. Load the exact
+        // embedded bytes via Path; both resource variants share the same 2x decoder.
+        use gpui::{Asset, ImageAssetLoader, Resource};
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons/programs/antigravity.svg");
+        assert_eq!(std::fs::read(&path).unwrap(), data.as_ref());
+        let executor = cx.executor();
+        let decoded =
+            cx.update(|cx| executor.block(ImageAssetLoader::load(Resource::from(path), cx)));
+        check(&decoded.unwrap(), 48);
+
+        // GPUI 0.2.2 does not export SvgSize. Set intrinsic dimensions on in-memory
+        // copies to exercise its resvg path at the target device pixel sizes.
+        for n in [12, 14, 16, 24, 28, 32] {
+            let resized = svg
+                .replacen("height=\"24\"", &format!("height=\"{n}\""), 1)
+                .replacen("width=\"24\"", &format!("width=\"{n}\""), 1);
+            check(&render(resized.into_bytes()), n);
+        }
+    }
 
     #[test]
     fn embedded_icons_are_listed_and_have_svg_mask_attributes() {
